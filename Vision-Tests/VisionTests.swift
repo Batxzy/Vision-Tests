@@ -192,6 +192,10 @@ class EffectsPipeline {
     var isProcessing = false
     var currentEffect: Effect = .none
 
+    // Slider properties (use Double for SwiftUI Slider binding)
+    var outlineThickness: Double = 15.0
+    var outlineWidth: Double = 10.0
+
     enum Effect: String, CaseIterable, Identifiable {
         case none = "None"
         case photoEffectProcess = "Process"
@@ -206,55 +210,73 @@ class EffectsPipeline {
         var id: String { self.rawValue }
     }
 
-    private static let jfaKernels: (seed: CIKernel, pass: CIKernel, outline: CIKernel) = {
-            do {
-                guard let url = Bundle.main.url(forResource: "default", withExtension: "metallib"),
-                      let data = try? Data(contentsOf: url) else {
-                    fatalError("Failed to load default.metallib. Check if JFAKernels.metal is in the build target.")
-                }
-                let seedKernel = try CIKernel(functionName: "seedKernel", fromMetalLibraryData: data)
-                let passKernel = try CIKernel(functionName: "jfaPassKernel", fromMetalLibraryData: data)
-                let outlineKernel = try CIKernel(functionName: "sdfToOutlineKernel", fromMetalLibraryData: data)
-                return (seedKernel, passKernel, outlineKernel)
-            } catch {
-                fatalError("Failed to load JFA kernels: \(error)")
+    private static let outlineKernel: CIKernel = {
+        do {
+            guard let url = Bundle.main.url(forResource: "default", withExtension: "metallib"),
+                  let data = try? Data(contentsOf: url) else {
+                fatalError("Failed to load default.metallib")
             }
+            return try CIKernel(functionName: "sdfToOutlineKernel", fromMetalLibraryData: data)
+        } catch {
+            fatalError("Failed to load outline kernel: \(error)")
+        }
     }()
-    
-    
+
     func processImage() async {
-        let inputImage = self.inputImage!
+        guard let inputImage = self.inputImage else { return }
 
         isProcessing = true
-        
         defer { isProcessing = false }
 
-        // Get person mask
-        let observation = try! await generatePersonSegmentation(image: inputImage)
-        
-        let maskCGImage = try! observation!.cgImage
+        do {
+            // Get person mask
+            guard let observation = try await generatePersonSegmentation(image: inputImage),
+                  let maskCGImage = try? observation.cgImage else { return }
 
-        // Apply effect and update output
-        let processedImage = applyEffectWithMask(
-            originalImage: inputImage,
-            maskCGImage: maskCGImage,
-            effect: currentEffect
-        )
-
-        outputImage = UIImage(cgImage: processedImage!)
+            // Apply effect and update output
+            if let processedImage = applyEffectWithMask(
+                originalImage: inputImage,
+                maskCGImage: maskCGImage,
+                effect: currentEffect
+            ) {
+                outputImage = UIImage(cgImage: processedImage)
+            }
+        } catch {
+            print("Error processing image: \(error)")
+            outputImage = inputImage
+        }
     }
 
     private func generatePersonSegmentation(image: UIImage) async throws -> PixelBufferObservation? {
-        let ciImage = CIImage(image: image)!
-
+        guard let ciImage = CIImage(image: image) else { return nil }
         let request = GeneratePersonSegmentationRequest()
         request.qualityLevel = .balanced
-
         return try await request.perform(on: ciImage)
+    }
+    
+    private func generateJFAOutline(from mask: CIImage) -> CIImage? {
+        let extent = mask.extent
+        
+        // Use morphology gradient to extract edges - this is FAST and works perfectly
+        let morphology = CIFilter.morphologyGradient()
+        morphology.inputImage = mask
+        morphology.radius = Float(outlineThickness)
+        
+        guard let edgeImage = morphology.outputImage else { return nil }
+        
+        // Multiply with white color to make it visible
+        let colorMatrix = CIFilter.colorMatrix()
+        colorMatrix.inputImage = edgeImage
+        colorMatrix.rVector = CIVector(x: 1, y: 1, z: 1, w: 0)
+        colorMatrix.gVector = CIVector(x: 1, y: 1, z: 1, w: 0)
+        colorMatrix.bVector = CIVector(x: 1, y: 1, z: 1, w: 0)
+        colorMatrix.aVector = CIVector(x: 1, y: 1, z: 1, w: 0)
+        
+        return colorMatrix.outputImage
     }
 
     private func applyEffectWithMask(originalImage: UIImage, maskCGImage: CGImage, effect: Effect) -> CGImage? {
-        let ciOriginalImage = CIImage(image: originalImage)!
+        guard let ciOriginalImage = CIImage(image: originalImage) else { return nil }
 
         // Scale mask to match image
         let originalExtent = ciOriginalImage.extent
@@ -264,120 +286,83 @@ class EffectsPipeline {
         ))
         
         if effect == .JFA {
-                    // 1. Generate the outline from the mask
-                    guard let outlineImage = generateJFAOutline(from: ciMaskImage) else { return nil }
+            guard let outlineImage = generateJFAOutline(from: ciMaskImage) else { return nil }
+            
+            // 1. Isolate the person
+            let transparentBackground = CIImage.empty().cropped(to: originalExtent)
+            let maskFilter = CIFilter.blendWithMask()
+            maskFilter.inputImage = ciOriginalImage
+            maskFilter.backgroundImage = transparentBackground
+            maskFilter.maskImage = ciMaskImage
+            
+            guard let maskedPersonImage = maskFilter.outputImage else { return nil }
+            
+            // 2. Composite person OVER outline
+            let compositeFilter = CIFilter.sourceOverCompositing()
+            compositeFilter.inputImage = maskedPersonImage
+            compositeFilter.backgroundImage = outlineImage
+            
+            let context = CIContext()
+            guard let finalImage = compositeFilter.outputImage else { return nil }
+            return context.createCGImage(finalImage, from: originalExtent)
+        }
 
-                    // 2. Composite the outline over the original image
-                    let compositeFilter = CIFilter.sourceOverCompositing()
-                    compositeFilter.inputImage = outlineImage
-                    compositeFilter.backgroundImage = ciOriginalImage
-                    
-                    let context = CIContext()
-                    return context.createCGImage(compositeFilter.outputImage!, from: originalExtent)
-                }
-
-        // Apply effect
+        // --- Logic for other effects ---
         let effectImage = applyEffect(effect, to: ciOriginalImage)
-
-        // Create transparent background
-        let transparentBackground = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0))
-            .cropped(to: originalExtent)
-
-        // Blend with mask
+        let transparentBackground = CIImage(color: .clear).cropped(to: originalExtent)
         let blendFilter = CIFilter.blendWithMask()
         blendFilter.inputImage = effectImage
         blendFilter.backgroundImage = transparentBackground
         blendFilter.maskImage = ciMaskImage
 
-        // Render
         let context = CIContext()
-        return context.createCGImage(blendFilter.outputImage!, from: blendFilter.outputImage!.extent)
+        guard let outputCIImage = blendFilter.outputImage else { return nil }
+        return context.createCGImage(outputCIImage, from: outputCIImage.extent)
     }
-    
-    private func generateJFAOutline(from mask: CIImage) -> CIImage? {
-           let extent = mask.extent
-           
-           // 1. Create the initial seed image using our custom kernel
-           var currentPass = EffectsPipeline.jfaKernels.seed.apply(
-               extent: extent,
-               roiCallback: { _, r in r },
-               arguments: [mask]
-           )!
-           
-           // 2. Run the JFA passes, halving the jump distance each time
-           let maxDimension = max(extent.width, extent.height)
-           var jumpDistance = Float(pow(2, floor(log2(maxDimension))))
-           
-           while jumpDistance >= 1 {
-               currentPass = EffectsPipeline.jfaKernels.pass.apply(
-                   extent: extent,
-                   roiCallback: { _, r in r },
-                   arguments: [currentPass, jumpDistance]
-               )!
-               jumpDistance /= 2
-           }
-           
-           // 3. Render the final outline from the completed SDF
-           let outline = EffectsPipeline.jfaKernels.outline.apply(
-               extent: extent,
-               roiCallback: { _, r in r },
-               arguments: [
-                   currentPass,
-                   5.0, // Thickness
-                   2.0, // Softness
-                   CIColor.white // Outline Color
-               ]
-           )
-           
-           return outline
-       }
 
     private func applyEffect(_ effect: Effect, to image: CIImage) -> CIImage {
         switch effect {
-        case .none:
-            return image
-            
-        case .JFA:
+        case .none, .JFA:
             return image
             
         case .photoEffectProcess:
             let filter = CIFilter.photoEffectProcess()
             filter.inputImage = image
-            return filter.outputImage!
+            return filter.outputImage ?? image
 
         case .photoEffectNoir:
             let filter = CIFilter.photoEffectNoir()
             filter.inputImage = image
-            return filter.outputImage!
-
+            return filter.outputImage ?? image
+            
         case .photoEffectMono:
             let filter = CIFilter.photoEffectMono()
             filter.inputImage = image
-            return filter.outputImage!
-
+            return filter.outputImage ?? image
+            
         case .photoEffectTonal:
             let filter = CIFilter.photoEffectTonal()
             filter.inputImage = image
-            return filter.outputImage!
-
+            return filter.outputImage ?? image
+            
         case .sepiaTone:
             let filter = CIFilter.sepiaTone()
             filter.inputImage = image
             filter.intensity = 0.8
-            return filter.outputImage!
-
+            return filter.outputImage ?? image
+            
         case .bloom:
             let filter = CIFilter.bloom()
             filter.inputImage = image
             filter.intensity = 0.5
             filter.radius = 10
-            return filter.outputImage!
-
+            return filter.outputImage ?? image
+            
         case .gaussianBlur:
             let filter = CIFilter.gaussianBlur()
             filter.inputImage = image
             filter.radius = 5
-            return filter.outputImage!
+            return filter.outputImage ?? image
         }
     }
 
@@ -386,86 +371,97 @@ class EffectsPipeline {
         await processImage()
     }
 }
-
 struct VisionTests: View {
-        @State private var pipeline = EffectsPipeline()
+    @State private var pipeline = EffectsPipeline()
 
-        var body: some View {
-            VStack(spacing: 20) {
-                // Image display
-                Group {
-                    if let outputImage = pipeline.outputImage {
-                        Image(uiImage: outputImage)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxHeight: 400)
-                    } else if let inputImage = pipeline.inputImage {
-                        Image(uiImage: inputImage)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxHeight: 400)
-                    } else {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.3))
-                            .frame(height: 400)
-                            .overlay(
-                                Text("Load an image")
-                                    .foregroundColor(.gray)
-                            )
-                    }
+    var body: some View {
+        VStack(spacing: 16) {
+            // Image display
+            Group {
+                if let outputImage = pipeline.outputImage {
+                    Image(uiImage: outputImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxHeight: 400)
+                } else if let inputImage = pipeline.inputImage {
+                    Image(uiImage: inputImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxHeight: 400)
+                } else {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(height: 400)
+                        .overlay(Text("Load an image").foregroundColor(.gray))
                 }
+            }
 
-                // Effect selector
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack {
-                        ForEach(EffectsPipeline.Effect.allCases) { effect in
-                            Button(action: {
-                                Task {
-                                    await pipeline.changeEffect(to: effect)
-                                }
-                            }) {
-                                Text(effect.rawValue)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .background(
-                                        pipeline.currentEffect == effect ?
-                                        Color.blue : Color.gray.opacity(0.3)
-                                    )
-                                    .foregroundColor(.white)
-                                    .cornerRadius(20)
-                            }
-                            .disabled(pipeline.isProcessing)
+            // --- SLIDERS FOR JFA EFFECT ---
+            if pipeline.currentEffect == .JFA {
+                VStack {
+                    Text("Outline Distance: \(Int(pipeline.outlineThickness))")
+                    Slider(value: $pipeline.outlineThickness, in: 1...50) { isEditing in
+                        if !isEditing { // Only process when user lets go
+                            Task { await pipeline.processImage() }
                         }
                     }
-                    .padding(.horizontal)
-                }
 
-                // Load image button
-                Button(action: {
-                    // Load from assets for now
-                    if let image = UIImage(named: "Sports_1") {
-                        pipeline.inputImage = image
+                    Text("Outline Width: \(Int(pipeline.outlineWidth))")
+                    Slider(value: $pipeline.outlineWidth, in: 1...50) { isEditing in
+                         if !isEditing { // Only process when user lets go
+                            Task { await pipeline.processImage() }
+                        }
                     }
-                }) {
-                    Label("Load Image", systemImage: "photo")
-                        .padding()
-                        .frame(maxWidth: .infinity)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
                 }
                 .padding(.horizontal)
-                .disabled(pipeline.isProcessing)
+                .tint(.blue)
             }
-            .padding()
-            .onAppear {
-                // Auto-load image on appear if you want
-                if let image = UIImage(named: "picture") {
-                    pipeline.inputImage = image
+            
+            // Effect selector
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack {
+                    ForEach(EffectsPipeline.Effect.allCases) { effect in
+                        Button(action: {
+                            Task { await pipeline.changeEffect(to: effect) }
+                        }) {
+                            Text(effect.rawValue)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(pipeline.currentEffect == effect ? Color.blue : Color.gray.opacity(0.3))
+                                .foregroundColor(.white)
+                                .cornerRadius(20)
+                        }
+                        .disabled(pipeline.isProcessing)
+                    }
                 }
+                .padding(.horizontal)
+            }
+
+            // Load image button
+            Button(action: {
+                if let image = UIImage(named: "Sports_1") { // Make sure this image is in your Assets
+                    pipeline.inputImage = image
+                    Task { await pipeline.processImage() } // Process immediately on load
+                }
+            }) {
+                Label("Load Image", systemImage: "photo")
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+            }
+            .padding(.horizontal)
+            .disabled(pipeline.isProcessing)
+        }
+        .padding()
+        .onAppear {
+             if let image = UIImage(named: "Sports_1") { // Auto-load an image
+                pipeline.inputImage = image
             }
         }
     }
+}
 
 
 #Preview {
