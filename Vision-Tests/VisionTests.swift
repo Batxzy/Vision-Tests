@@ -14,7 +14,9 @@ class EffectsPipeline {
     var cornerRadius: Double = 20.0
     var circleRadiusMultiplier: Double = 1.1
     var shapeOutlineWidth: Double = 5.0
-    var backgroundColor: UIColor = .white
+    var backgroundColor: Color = .white
+    var outlineColor: Color = .black
+    var useThreeLayerEffect: Bool = false
     
     enum Effect: String, CaseIterable, Identifiable {
         case none = "None"
@@ -148,14 +150,14 @@ class EffectsPipeline {
         return unionBox
     }
     
-    private func pathToCIImage(_ path: CGPath, in extent: CGRect, strokeWidth: CGFloat) -> CIImage? {
+    private func pathToCIImage(_ path: CGPath, in extent: CGRect, strokeWidth: CGFloat, color: UIColor) -> CIImage? {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         
         let renderer = UIGraphicsImageRenderer(size: extent.size, format: format)
         
         let image = renderer.image { context in
-            context.cgContext.setStrokeColor(UIColor.white.cgColor)
+            context.cgContext.setStrokeColor(color.cgColor)
             context.cgContext.setLineWidth(strokeWidth)
             context.cgContext.setLineCap(.round)
             context.cgContext.setLineJoin(.round)
@@ -172,7 +174,7 @@ class EffectsPipeline {
         return CIImage(image: image)
     }
     
-    private func circleToCIImage(boundingBox: CGRect, in extent: CGRect) -> CIImage? {
+    private func circleToCIImage(boundingBox: CGRect, in extent: CGRect, color: UIColor) -> CIImage? {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         
@@ -193,15 +195,14 @@ class EffectsPipeline {
                 height: radius * 2
             )
             
-            // Only fill with solid color, no stroke
-            context.cgContext.setFillColor(backgroundColor.cgColor)
+            context.cgContext.setFillColor(color.cgColor)
             context.cgContext.fillEllipse(in: rect)
         }
         
         return CIImage(image: image)
     }
     
-    private func roundedRectangleToCIImage(boundingBox: CGRect, cornerRadius: CGFloat, in extent: CGRect) -> CIImage? {
+    private func roundedRectangleToCIImage(boundingBox: CGRect, cornerRadius: CGFloat, in extent: CGRect, color: UIColor) -> CIImage? {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         
@@ -225,8 +226,7 @@ class EffectsPipeline {
             
             let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius)
             
-            // Only fill with solid color, no stroke
-            context.cgContext.setFillColor(backgroundColor.cgColor)
+            context.cgContext.setFillColor(color.cgColor)
             context.cgContext.addPath(path.cgPath)
             context.cgContext.fillPath()
         }
@@ -294,7 +294,7 @@ class EffectsPipeline {
         return CIImage(image: image)
     }
     
-    private func generateJFAOutline(from mask: CIImage) -> CIImage? {
+    private func generateJFAOutline(from mask: CIImage, color: Color) -> CIImage? {
         let morphology = CIFilter.morphologyGradient()
         morphology.inputImage = mask
         morphology.radius = Float(outlineThickness)
@@ -307,29 +307,34 @@ class EffectsPipeline {
         
         guard let blurredEdge = blur.outputImage else { return nil }
         
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        
         let colorMatrix = CIFilter.colorMatrix()
         colorMatrix.inputImage = blurredEdge
-        colorMatrix.rVector = CIVector(x: 1, y: 1, z: 1, w: 0)
-        colorMatrix.gVector = CIVector(x: 1, y: 1, z: 1, w: 0)
-        colorMatrix.bVector = CIVector(x: 1, y: 1, z: 1, w: 0)
+        colorMatrix.rVector = CIVector(x: r, y: r, z: r, w: 0)
+        colorMatrix.gVector = CIVector(x: g, y: g, z: g, w: 0)
+        colorMatrix.bVector = CIVector(x: b, y: b, z: b, w: 0)
         colorMatrix.aVector = CIVector(x: 1, y: 1, z: 1, w: 0)
         
         return colorMatrix.outputImage
     }
-    
-    private func generateShapeOutline(from shape: CIImage) -> CIImage? {
+
+    private func generateShapeOutline(from shape: CIImage, color: Color) -> CIImage? {
         let morphology = CIFilter.morphologyGradient()
         morphology.inputImage = shape
         morphology.radius = Float(shapeOutlineWidth)
         
         guard let edgeImage = morphology.outputImage else { return nil }
         
-        // Make it black
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        
         let colorMatrix = CIFilter.colorMatrix()
         colorMatrix.inputImage = edgeImage
-        colorMatrix.rVector = CIVector(x: 0, y: 0, z: 0, w: 0)
-        colorMatrix.gVector = CIVector(x: 0, y: 0, z: 0, w: 0)
-        colorMatrix.bVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        colorMatrix.rVector = CIVector(x: r, y: r, z: r, w: 0)
+        colorMatrix.gVector = CIVector(x: g, y: g, z: g, w: 0)
+        colorMatrix.bVector = CIVector(x: b, y: b, z: b, w: 0)
         colorMatrix.aVector = CIVector(x: 1, y: 1, z: 1, w: 0)
         
         return colorMatrix.outputImage
@@ -360,7 +365,7 @@ class EffectsPipeline {
     }
     
     private func applyJFAEffect(original: CIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
-        guard let outlineImage = generateJFAOutline(from: mask) else { return nil }
+        guard let outlineImage = generateJFAOutline(from: mask, color: outlineColor) else { return nil }
         
         let transparentBackground = CIImage.empty().cropped(to: extent)
         let maskFilter = CIFilter.blendWithMask()
@@ -381,7 +386,7 @@ class EffectsPipeline {
     private func applyContoursEffect(original: CIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
         guard let cleanedMaskCGImage = context.createCGImage(mask, from: extent),
               let path = try? await detectContours(from: cleanedMaskCGImage),
-              let outlineImage = pathToCIImage(path, in: extent, strokeWidth: outlineThickness) else {
+              let outlineImage = pathToCIImage(path, in: extent, strokeWidth: outlineThickness, color: UIColor(outlineColor)) else {
             return nil
         }
         
@@ -400,18 +405,17 @@ class EffectsPipeline {
         guard let finalImage = compositeFilter.outputImage else { return nil }
         return context.createCGImage(finalImage, from: extent)
     }
+
     
     private func applyCircleBgEffect(original: CIImage, originalImage: UIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
         guard let boundingBox = try? await detectSaliency(from: originalImage),
-              let circleBackground = circleToCIImage(boundingBox: boundingBox, in: extent),
+              let circleBackground = circleToCIImage(boundingBox: boundingBox, in: extent, color: UIColor(backgroundColor)),
               let circleMask = createCircleMask(boundingBox: boundingBox, in: extent) else {
             return nil
         }
         
-        // Generate outline from circle mask
-        guard let circleOutline = generateShapeOutline(from: circleBackground) else { return nil }
+        guard let circleOutline = generateShapeOutline(from: circleBackground, color: outlineColor) else { return nil }
         
-        // Mask person from original image
         let transparentBackground = CIImage.empty().cropped(to: extent)
         let maskFilter1 = CIFilter.blendWithMask()
         maskFilter1.inputImage = original
@@ -420,7 +424,6 @@ class EffectsPipeline {
         
         guard let maskedPerson = maskFilter1.outputImage else { return nil }
         
-        // Clip person to circle shape
         let maskFilter2 = CIFilter.blendWithMask()
         maskFilter2.inputImage = maskedPerson
         maskFilter2.backgroundImage = transparentBackground
@@ -428,32 +431,45 @@ class EffectsPipeline {
         
         guard let clippedPerson = maskFilter2.outputImage else { return nil }
         
-        // Composite: background -> outline -> person
-        let composite1 = CIFilter.sourceOverCompositing()
-        composite1.inputImage = circleOutline
-        composite1.backgroundImage = circleBackground
-        
-        guard let bgWithOutline = composite1.outputImage else { return nil }
-        
-        let composite2 = CIFilter.sourceOverCompositing()
-        composite2.inputImage = clippedPerson
-        composite2.backgroundImage = bgWithOutline
-        
-        guard let finalImage = composite2.outputImage else { return nil }
-        return context.createCGImage(finalImage, from: extent)
+        if useThreeLayerEffect {
+            let composite1 = CIFilter.sourceOverCompositing()
+            composite1.inputImage = clippedPerson
+            composite1.backgroundImage = circleBackground
+            
+            guard let bgWithPerson = composite1.outputImage else { return nil }
+            
+            let composite2 = CIFilter.sourceOverCompositing()
+            composite2.inputImage = circleOutline
+            composite2.backgroundImage = bgWithPerson
+            
+            guard let finalImage = composite2.outputImage else { return nil }
+            return context.createCGImage(finalImage, from: extent)
+        } else {
+            let composite1 = CIFilter.sourceOverCompositing()
+            composite1.inputImage = circleOutline
+            composite1.backgroundImage = circleBackground
+            
+            guard let bgWithOutline = composite1.outputImage else { return nil }
+            
+            let composite2 = CIFilter.sourceOverCompositing()
+            composite2.inputImage = clippedPerson
+            composite2.backgroundImage = bgWithOutline
+            
+            guard let finalImage = composite2.outputImage else { return nil }
+            return context.createCGImage(finalImage, from: extent)
+        }
     }
 
+    
     private func applyRectangleBgEffect(original: CIImage, originalImage: UIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
         guard let boundingBox = try? await detectHumanRectangles(from: originalImage),
-              let rectangleBackground = roundedRectangleToCIImage(boundingBox: boundingBox, cornerRadius: cornerRadius, in: extent),
+              let rectangleBackground = roundedRectangleToCIImage(boundingBox: boundingBox, cornerRadius: cornerRadius, in: extent, color: UIColor(backgroundColor)),
               let rectangleMask = createRectangleMask(boundingBox: boundingBox, cornerRadius: cornerRadius, in: extent) else {
             return nil
         }
         
-        // Generate outline from rectangle mask
-        guard let rectangleOutline = generateShapeOutline(from: rectangleBackground) else { return nil }
+        guard let rectangleOutline = generateShapeOutline(from: rectangleBackground, color: outlineColor) else { return nil }
         
-        // Mask person from original image
         let transparentBackground = CIImage.empty().cropped(to: extent)
         let maskFilter1 = CIFilter.blendWithMask()
         maskFilter1.inputImage = original
@@ -462,7 +478,6 @@ class EffectsPipeline {
         
         guard let maskedPerson = maskFilter1.outputImage else { return nil }
         
-        // Clip person to rectangle shape
         let maskFilter2 = CIFilter.blendWithMask()
         maskFilter2.inputImage = maskedPerson
         maskFilter2.backgroundImage = transparentBackground
@@ -470,19 +485,33 @@ class EffectsPipeline {
         
         guard let clippedPerson = maskFilter2.outputImage else { return nil }
         
-        // Composite: background -> outline -> person
-        let composite1 = CIFilter.sourceOverCompositing()
-        composite1.inputImage = rectangleOutline
-        composite1.backgroundImage = rectangleBackground
-        
-        guard let bgWithOutline = composite1.outputImage else { return nil }
-        
-        let composite2 = CIFilter.sourceOverCompositing()
-        composite2.inputImage = clippedPerson
-        composite2.backgroundImage = bgWithOutline
-        
-        guard let finalImage = composite2.outputImage else { return nil }
-        return context.createCGImage(finalImage, from: extent)
+        if useThreeLayerEffect {
+            let composite1 = CIFilter.sourceOverCompositing()
+            composite1.inputImage = clippedPerson
+            composite1.backgroundImage = rectangleBackground
+            
+            guard let bgWithPerson = composite1.outputImage else { return nil }
+            
+            let composite2 = CIFilter.sourceOverCompositing()
+            composite2.inputImage = rectangleOutline
+            composite2.backgroundImage = bgWithPerson
+            
+            guard let finalImage = composite2.outputImage else { return nil }
+            return context.createCGImage(finalImage, from: extent)
+        } else {
+            let composite1 = CIFilter.sourceOverCompositing()
+            composite1.inputImage = rectangleOutline
+            composite1.backgroundImage = rectangleBackground
+            
+            guard let bgWithOutline = composite1.outputImage else { return nil }
+            
+            let composite2 = CIFilter.sourceOverCompositing()
+            composite2.inputImage = clippedPerson
+            composite2.backgroundImage = bgWithOutline
+            
+            guard let finalImage = composite2.outputImage else { return nil }
+            return context.createCGImage(finalImage, from: extent)
+        }
     }
     
     private func applyStandardEffect(effect: Effect, original: CIImage, mask: CIImage, extent: CGRect, context: CIContext) -> CGImage? {
@@ -574,13 +603,40 @@ struct VisionTests: View {
             }
             
             if pipeline.currentEffect == .JFA {
-                VStack {
-                    Text("Outline Thickness: \(Int(pipeline.outlineThickness))")
-                    Slider(value: $pipeline.outlineThickness, in: 1...50) { isEditing in
-                        if !isEditing {
-                            Task { await pipeline.processImage() }
+                VStack(spacing: 12) {
+                    VStack {
+                        Text("Outline Thickness: \(Int(pipeline.outlineThickness))")
+                        Slider(value: $pipeline.outlineThickness, in: 1...50) { isEditing in
+                            if !isEditing {
+                                Task { await pipeline.processImage() }
+                            }
                         }
                     }
+                    
+                    ColorPicker("Outline Color", selection: $pipeline.outlineColor)
+                        .onChange(of: pipeline.outlineColor) {
+                            Task { await pipeline.processImage() }
+                        }
+                }
+                .padding(.horizontal)
+                .tint(.blue)
+            }
+            
+            if pipeline.currentEffect == .Countours {
+                VStack(spacing: 12) {
+                    VStack {
+                        Text("Outline Thickness: \(Int(pipeline.outlineThickness))")
+                        Slider(value: $pipeline.outlineThickness, in: 1...50) { isEditing in
+                            if !isEditing {
+                                Task { await pipeline.processImage() }
+                            }
+                        }
+                    }
+                    
+                    ColorPicker("Outline Color", selection: $pipeline.outlineColor)
+                        .onChange(of: pipeline.outlineColor) {
+                            Task { await pipeline.processImage() }
+                        }
                 }
                 .padding(.horizontal)
                 .tint(.blue)
@@ -588,6 +644,11 @@ struct VisionTests: View {
             
             if pipeline.currentEffect == .CircleBg {
                 VStack(spacing: 12) {
+                    Toggle("Outline on Top", isOn: $pipeline.useThreeLayerEffect)
+                        .onChange(of: pipeline.useThreeLayerEffect) {
+                            Task { await pipeline.processImage() }
+                        }
+                    
                     VStack {
                         Text("Circle Radius: \(String(format: "%.2f", pipeline.circleRadiusMultiplier))")
                         Slider(value: $pipeline.circleRadiusMultiplier, in: 0.5...2.0) { isEditing in
@@ -605,6 +666,16 @@ struct VisionTests: View {
                             }
                         }
                     }
+                    
+                    ColorPicker("Background Color", selection: $pipeline.backgroundColor)
+                        .onChange(of: pipeline.backgroundColor) {
+                            Task { await pipeline.processImage() }
+                        }
+                    
+                    ColorPicker("Outline Color", selection: $pipeline.outlineColor)
+                        .onChange(of: pipeline.outlineColor) {
+                            Task { await pipeline.processImage() }
+                        }
                 }
                 .padding(.horizontal)
                 .tint(.blue)
@@ -612,6 +683,11 @@ struct VisionTests: View {
             
             if pipeline.currentEffect == .rectangleBg {
                 VStack(spacing: 12) {
+                    Toggle("Outline on Top", isOn: $pipeline.useThreeLayerEffect)
+                        .onChange(of: pipeline.useThreeLayerEffect) {
+                            Task { await pipeline.processImage() }
+                        }
+                    
                     VStack {
                         Text("Corner Radius: \(Int(pipeline.cornerRadius))")
                         Slider(value: $pipeline.cornerRadius, in: 0...100) { isEditing in
@@ -629,6 +705,16 @@ struct VisionTests: View {
                             }
                         }
                     }
+                    
+                    ColorPicker("Background Color", selection: $pipeline.backgroundColor)
+                        .onChange(of: pipeline.backgroundColor) {
+                            Task { await pipeline.processImage() }
+                        }
+                    
+                    ColorPicker("Outline Color", selection: $pipeline.outlineColor)
+                        .onChange(of: pipeline.outlineColor) {
+                            Task { await pipeline.processImage() }
+                        }
                 }
                 .padding(.horizontal)
                 .tint(.blue)
@@ -654,7 +740,7 @@ struct VisionTests: View {
             }
             
             Button(action: {
-                if let image = UIImage(named: "Turing") {
+                if let image = UIImage(named: "Sports_4") {
                     pipeline.inputImage = image
                     Task { await pipeline.processImage() }
                 }
