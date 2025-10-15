@@ -11,16 +11,18 @@ class EffectsPipeline {
     var currentEffect: Effect = .none
     
     var outlineThickness: Double = 15.0
-    var contourThickness: Double = 10.0
-    var pathSimplification: Double = 0.01
+    var cornerRadius: Double = 20.0
+    var circleRadiusMultiplier: Double = 1.1
+    var shapeOutlineWidth: Double = 5.0
+    var backgroundColor: UIColor = .white
     
     enum Effect: String, CaseIterable, Identifiable {
         case none = "None"
         case photoEffectProcess = "Process"
         case JFA = "JumpFlood"
-        case Countours = "Contours"
-        case CircleBackground = "Circle BG"
-        case RectangleBackground = "Rect BG"
+        case Countours = "contours"
+        case CircleBg = "circle background"
+        case rectangleBg = "rectangle background"
         case photoEffectNoir = "Noir"
         case photoEffectMono = "Mono"
         case photoEffectTonal = "Tonal"
@@ -95,94 +97,82 @@ class EffectsPipeline {
         return blur.outputImage
     }
     
-    private func detectContours(from ciMask: CIImage, epsilon: Float) async throws -> ContoursObservation.Contour? {
+    private func detectContours(from maskCGImage: CGImage) async throws -> CGPath? {
         var request = DetectContoursRequest()
         request.contrastAdjustment = 1.0
-        request.detectsDarkOnLight = true
+        request.detectsDarkOnLight = false
         
-        let observation = try await request.perform(on: ciMask, orientation: .up)
+        let maskImage = CIImage(cgImage: maskCGImage)
+        let observation = try await request.perform(on: maskImage, orientation: .up)
         
-        guard let topContour = observation.topLevelContours.first else { return nil }
-        
-        let simplified = try topContour.polygonApproximation(epsilon: epsilon)
-        
-        return simplified
+        return observation.normalizedPath
     }
     
-    private func contourToPath(_ contour: ContoursObservation.Contour, in extent: CGRect) -> CGPath {
-        let path = CGMutablePath()
+    private func detectHumanRectangles(from image: UIImage) async throws -> CGRect? {
+        guard let cgImage = image.cgImage else { return nil }
         
-        let pointCount = contour.pointCount
-        if pointCount == 0 { return path }
+        let request = VNDetectHumanRectanglesRequest()
+        request.upperBodyOnly = false
         
-        let points = contour.normalizedPoints
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        try handler.perform([request])
         
-        let firstPoint = CGPoint(
-            x: CGFloat(points[0].x) * extent.width,
-            y: (1 - CGFloat(points[0].y)) * extent.height
-        )
-        path.move(to: firstPoint)
+        guard let results = request.results, !results.isEmpty else { return nil }
         
-        for i in 1..<pointCount {
-            let point = CGPoint(
-                x: CGFloat(points[i].x) * extent.width,
-                y: (1 - CGFloat(points[i].y)) * extent.height
-            )
-            path.addLine(to: point)
+        var unionBox = results[0].boundingBox
+        for i in 1..<results.count {
+            unionBox = unionBox.union(results[i].boundingBox)
         }
         
-        path.closeSubpath()
-        return path
+        return unionBox
     }
     
-    private func createBoundingCircle(from ciMask: CIImage, in extent: CGRect) async throws -> VNCircle {
-        var request = DetectContoursRequest()
-        request.contrastAdjustment = 1.0
-        request.detectsDarkOnLight = true
+    private func detectSaliency(from image: UIImage) async throws -> CGRect? {
+        guard let cgImage = image.cgImage else { return nil }
         
-        let observation = try await request.perform(on: ciMask, orientation: .up)
+        let request = VNGenerateAttentionBasedSaliencyImageRequest()
         
-        if let topContour = observation.topLevelContours.first {
-            let path = topContour.normalizedPath
-            let boundingBox = path.boundingBox
-            
-            let center = VNPoint(
-                x: boundingBox.midX,
-                y: boundingBox.midY
-            )
-            
-            let radius = max(boundingBox.width, boundingBox.height) / 2 * 1.1
-            
-            return VNCircle(center: center, radius: radius)
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        try handler.perform([request])
+        
+        guard let saliency = request.results?.first,
+              let salientObjects = saliency.salientObjects, !salientObjects.isEmpty else {
+            return nil
         }
         
-        return VNCircle(center: VNPoint(x: 0.5, y: 0.5), radius: 0.5)
-    }
-    
-    private func createBoundingRectangle(from ciMask: CIImage, in extent: CGRect) async throws -> CGRect {
-        var request = DetectContoursRequest()
-        request.contrastAdjustment = 1.0
-        request.detectsDarkOnLight = true
-        
-        let observation = try await request.perform(on: ciMask, orientation: .up)
-        
-        if let topContour = observation.topLevelContours.first {
-            let path = topContour.normalizedPath
-            let boundingBox = path.boundingBox
-            
-            let padding: CGFloat = 0.05
-            return CGRect(
-                x: max(0, boundingBox.minX - padding),
-                y: max(0, boundingBox.minY - padding),
-                width: min(1.0, boundingBox.width + padding * 2),
-                height: min(1.0, boundingBox.height + padding * 2)
-            )
+        var unionBox = salientObjects[0].boundingBox
+        for i in 1..<salientObjects.count {
+            unionBox = unionBox.union(salientObjects[i].boundingBox)
         }
         
-        return CGRect(x: 0, y: 0, width: 1, height: 1)
+        return unionBox
     }
     
-    private func circleToCIImage(_ circle: VNCircle, in extent: CGRect) -> CIImage? {
+    private func pathToCIImage(_ path: CGPath, in extent: CGRect, strokeWidth: CGFloat) -> CIImage? {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        
+        let renderer = UIGraphicsImageRenderer(size: extent.size, format: format)
+        
+        let image = renderer.image { context in
+            context.cgContext.setStrokeColor(UIColor.white.cgColor)
+            context.cgContext.setLineWidth(strokeWidth)
+            context.cgContext.setLineCap(.round)
+            context.cgContext.setLineJoin(.round)
+            
+            var transform = CGAffineTransform(scaleX: extent.width, y: -extent.height)
+                .translatedBy(x: 0, y: -1)
+            
+            if let scaledPath = path.copy(using: &transform) {
+                context.cgContext.addPath(scaledPath)
+                context.cgContext.strokePath()
+            }
+        }
+        
+        return CIImage(image: image)
+    }
+    
+    private func circleToCIImage(boundingBox: CGRect, in extent: CGRect) -> CIImage? {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         
@@ -190,10 +180,73 @@ class EffectsPipeline {
         
         let image = renderer.image { context in
             let center = CGPoint(
-                x: CGFloat(circle.center.x) * extent.width,
-                y: (1 - CGFloat(circle.center.y)) * extent.height
+                x: boundingBox.midX * extent.width,
+                y: (1 - boundingBox.midY) * extent.height
             )
-            let radius = circle.radius * min(extent.width, extent.height)
+            
+            let radius = max(boundingBox.width * extent.width, boundingBox.height * extent.height) / 2 * circleRadiusMultiplier
+            
+            let rect = CGRect(
+                x: center.x - radius,
+                y: center.y - radius,
+                width: radius * 2,
+                height: radius * 2
+            )
+            
+            // Only fill with solid color, no stroke
+            context.cgContext.setFillColor(backgroundColor.cgColor)
+            context.cgContext.fillEllipse(in: rect)
+        }
+        
+        return CIImage(image: image)
+    }
+    
+    private func roundedRectangleToCIImage(boundingBox: CGRect, cornerRadius: CGFloat, in extent: CGRect) -> CIImage? {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        
+        let renderer = UIGraphicsImageRenderer(size: extent.size, format: format)
+        
+        let image = renderer.image { context in
+            let padding: CGFloat = 0.05
+            let paddedBox = CGRect(
+                x: max(0, boundingBox.minX - padding),
+                y: max(0, boundingBox.minY - padding),
+                width: min(1.0, boundingBox.width + padding * 2),
+                height: min(1.0, boundingBox.height + padding * 2)
+            )
+            
+            let rect = CGRect(
+                x: paddedBox.minX * extent.width,
+                y: (1 - paddedBox.maxY) * extent.height,
+                width: paddedBox.width * extent.width,
+                height: paddedBox.height * extent.height
+            )
+            
+            let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius)
+            
+            // Only fill with solid color, no stroke
+            context.cgContext.setFillColor(backgroundColor.cgColor)
+            context.cgContext.addPath(path.cgPath)
+            context.cgContext.fillPath()
+        }
+        
+        return CIImage(image: image)
+    }
+    
+    private func createCircleMask(boundingBox: CGRect, in extent: CGRect) -> CIImage? {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        
+        let renderer = UIGraphicsImageRenderer(size: extent.size, format: format)
+        
+        let image = renderer.image { context in
+            let center = CGPoint(
+                x: boundingBox.midX * extent.width,
+                y: (1 - boundingBox.midY) * extent.height
+            )
+            
+            let radius = max(boundingBox.width * extent.width, boundingBox.height * extent.height) / 2 * circleRadiusMultiplier
             
             let rect = CGRect(
                 x: center.x - radius,
@@ -209,41 +262,33 @@ class EffectsPipeline {
         return CIImage(image: image)
     }
     
-    private func rectangleToCIImage(_ normalizedRect: CGRect, in extent: CGRect) -> CIImage? {
+    private func createRectangleMask(boundingBox: CGRect, cornerRadius: CGFloat, in extent: CGRect) -> CIImage? {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         
         let renderer = UIGraphicsImageRenderer(size: extent.size, format: format)
         
         let image = renderer.image { context in
-            let rect = CGRect(
-                x: normalizedRect.minX * extent.width,
-                y: (1 - normalizedRect.maxY) * extent.height,
-                width: normalizedRect.width * extent.width,
-                height: normalizedRect.height * extent.height
+            let padding: CGFloat = 0.05
+            let paddedBox = CGRect(
+                x: max(0, boundingBox.minX - padding),
+                y: max(0, boundingBox.minY - padding),
+                width: min(1.0, boundingBox.width + padding * 2),
+                height: min(1.0, boundingBox.height + padding * 2)
             )
             
-            context.cgContext.setFillColor(UIColor.white.cgColor)
-            context.cgContext.fill(rect)
-        }
-        
-        return CIImage(image: image)
-    }
-    
-    private func pathToCIImage(_ path: CGPath, strokeWidth: CGFloat, in extent: CGRect) -> CIImage? {
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1.0
-        
-        let renderer = UIGraphicsImageRenderer(size: extent.size, format: format)
-        
-        let image = renderer.image { context in
-            context.cgContext.setStrokeColor(UIColor.white.cgColor)
-            context.cgContext.setLineWidth(strokeWidth)
-            context.cgContext.setLineCap(.round)
-            context.cgContext.setLineJoin(.round)
+            let rect = CGRect(
+                x: paddedBox.minX * extent.width,
+                y: (1 - paddedBox.maxY) * extent.height,
+                width: paddedBox.width * extent.width,
+                height: paddedBox.height * extent.height
+            )
             
-            context.cgContext.addPath(path)
-            context.cgContext.strokePath()
+            let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius)
+            
+            context.cgContext.setFillColor(UIColor.white.cgColor)
+            context.cgContext.addPath(path.cgPath)
+            context.cgContext.fillPath()
         }
         
         return CIImage(image: image)
@@ -272,110 +317,181 @@ class EffectsPipeline {
         return colorMatrix.outputImage
     }
     
+    private func generateShapeOutline(from shape: CIImage) -> CIImage? {
+        let morphology = CIFilter.morphologyGradient()
+        morphology.inputImage = shape
+        morphology.radius = Float(shapeOutlineWidth)
+        
+        guard let edgeImage = morphology.outputImage else { return nil }
+        
+        // Make it black
+        let colorMatrix = CIFilter.colorMatrix()
+        colorMatrix.inputImage = edgeImage
+        colorMatrix.rVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        colorMatrix.gVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        colorMatrix.bVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        colorMatrix.aVector = CIVector(x: 1, y: 1, z: 1, w: 0)
+        
+        return colorMatrix.outputImage
+    }
+    
     private func applyEffectWithMask(originalImage: UIImage, maskCGImage: CGImage, effect: Effect) async -> CGImage? {
         guard let ciOriginalImage = CIImage(image: originalImage) else { return nil }
-        
         let originalExtent = ciOriginalImage.extent
+        guard let ciMaskImage = cleanSegmentationMask(maskCGImage, targetSize: originalExtent.size) else { return nil }
+        let context = CIContext()
         
-        guard let ciMaskImage = cleanSegmentationMask(maskCGImage, targetSize: originalExtent.size) else {
+        switch effect {
+        case .JFA:
+            return await applyJFAEffect(original: ciOriginalImage, mask: ciMaskImage, extent: originalExtent, context: context)
+            
+        case .Countours:
+            return await applyContoursEffect(original: ciOriginalImage, mask: ciMaskImage, extent: originalExtent, context: context)
+            
+        case .CircleBg:
+            return await applyCircleBgEffect(original: ciOriginalImage, originalImage: originalImage, mask: ciMaskImage, extent: originalExtent, context: context)
+            
+        case .rectangleBg:
+            return await applyRectangleBgEffect(original: ciOriginalImage, originalImage: originalImage, mask: ciMaskImage, extent: originalExtent, context: context)
+            
+        default:
+            return applyStandardEffect(effect: effect, original: ciOriginalImage, mask: ciMaskImage, extent: originalExtent, context: context)
+        }
+    }
+    
+    private func applyJFAEffect(original: CIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
+        guard let outlineImage = generateJFAOutline(from: mask) else { return nil }
+        
+        let transparentBackground = CIImage.empty().cropped(to: extent)
+        let maskFilter = CIFilter.blendWithMask()
+        maskFilter.inputImage = original
+        maskFilter.backgroundImage = transparentBackground
+        maskFilter.maskImage = mask
+        
+        guard let maskedPersonImage = maskFilter.outputImage else { return nil }
+        
+        let compositeFilter = CIFilter.sourceOverCompositing()
+        compositeFilter.inputImage = maskedPersonImage
+        compositeFilter.backgroundImage = outlineImage
+        
+        guard let finalImage = compositeFilter.outputImage else { return nil }
+        return context.createCGImage(finalImage, from: extent)
+    }
+    
+    private func applyContoursEffect(original: CIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
+        guard let cleanedMaskCGImage = context.createCGImage(mask, from: extent),
+              let path = try? await detectContours(from: cleanedMaskCGImage),
+              let outlineImage = pathToCIImage(path, in: extent, strokeWidth: outlineThickness) else {
             return nil
         }
         
-        let context = CIContext()
+        let transparentBackground = CIImage.empty().cropped(to: extent)
+        let maskFilter = CIFilter.blendWithMask()
+        maskFilter.inputImage = original
+        maskFilter.backgroundImage = transparentBackground
+        maskFilter.maskImage = mask
         
-        if effect == .JFA {
-            guard let outlineImage = generateJFAOutline(from: ciMaskImage) else { return nil }
-            
-            let transparentBackground = CIImage.empty().cropped(to: originalExtent)
-            let maskFilter = CIFilter.blendWithMask()
-            maskFilter.inputImage = ciOriginalImage
-            maskFilter.backgroundImage = transparentBackground
-            maskFilter.maskImage = ciMaskImage
-            
-            guard let maskedPersonImage = maskFilter.outputImage else { return nil }
-            
-            let compositeFilter = CIFilter.sourceOverCompositing()
-            compositeFilter.inputImage = maskedPersonImage
-            compositeFilter.backgroundImage = outlineImage
-            
-            guard let finalImage = compositeFilter.outputImage else { return nil }
-            return context.createCGImage(finalImage, from: originalExtent)
-            
-        } else if effect == .Countours {
-            guard let contour = try? await detectContours(from: ciMaskImage, epsilon: Float(self.pathSimplification)) else {
-                return nil
-            }
-            
-            let path = contourToPath(contour, in: originalExtent)
-            
-            guard let outlineImage = pathToCIImage(path, strokeWidth: self.contourThickness, in: originalExtent) else {
-                return nil
-            }
-            
-            let transparentBackground = CIImage.empty().cropped(to: originalExtent)
-            let maskFilter = CIFilter.blendWithMask()
-            maskFilter.inputImage = ciOriginalImage
-            maskFilter.backgroundImage = transparentBackground
-            maskFilter.maskImage = ciMaskImage
-            
-            guard let maskedPersonImage = maskFilter.outputImage else { return nil }
-            
-            let compositeFilter = CIFilter.sourceOverCompositing()
-            compositeFilter.inputImage = maskedPersonImage
-            compositeFilter.backgroundImage = outlineImage
-            
-            guard let finalImage = compositeFilter.outputImage else { return nil }
-            return context.createCGImage(finalImage, from: originalExtent)
-            
-        } else if effect == .CircleBackground {
-            guard let circle = try? await createBoundingCircle(from: ciMaskImage, in: originalExtent),
-                  let circleImage = circleToCIImage(circle, in: originalExtent) else {
-                return nil
-            }
-            
-            let transparentBackground = CIImage.empty().cropped(to: originalExtent)
-            let maskFilter = CIFilter.blendWithMask()
-            maskFilter.inputImage = ciOriginalImage
-            maskFilter.backgroundImage = transparentBackground
-            maskFilter.maskImage = ciMaskImage
-            
-            guard let maskedPersonImage = maskFilter.outputImage else { return nil }
-            
-            let compositeFilter = CIFilter.sourceOverCompositing()
-            compositeFilter.inputImage = maskedPersonImage
-            compositeFilter.backgroundImage = circleImage
-            
-            guard let finalImage = compositeFilter.outputImage else { return nil }
-            return context.createCGImage(finalImage, from: originalExtent)
-            
-        } else if effect == .RectangleBackground {
-            guard let normalizedRect = try? await createBoundingRectangle(from: ciMaskImage, in: originalExtent),
-                  let rectangleImage = rectangleToCIImage(normalizedRect, in: originalExtent) else {
-                return nil
-            }
-            
-            let transparentBackground = CIImage.empty().cropped(to: originalExtent)
-            let maskFilter = CIFilter.blendWithMask()
-            maskFilter.inputImage = ciOriginalImage
-            maskFilter.backgroundImage = transparentBackground
-            maskFilter.maskImage = ciMaskImage
-            
-            guard let maskedPersonImage = maskFilter.outputImage else { return nil }
-            
-            let compositeFilter = CIFilter.sourceOverCompositing()
-            compositeFilter.inputImage = maskedPersonImage
-            compositeFilter.backgroundImage = rectangleImage
-            
-            guard let finalImage = compositeFilter.outputImage else { return nil }
-            return context.createCGImage(finalImage, from: originalExtent)
+        guard let maskedPersonImage = maskFilter.outputImage else { return nil }
+        
+        let compositeFilter = CIFilter.sourceOverCompositing()
+        compositeFilter.inputImage = maskedPersonImage
+        compositeFilter.backgroundImage = outlineImage
+        
+        guard let finalImage = compositeFilter.outputImage else { return nil }
+        return context.createCGImage(finalImage, from: extent)
+    }
+    
+    private func applyCircleBgEffect(original: CIImage, originalImage: UIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
+        guard let boundingBox = try? await detectSaliency(from: originalImage),
+              let circleBackground = circleToCIImage(boundingBox: boundingBox, in: extent),
+              let circleMask = createCircleMask(boundingBox: boundingBox, in: extent) else {
+            return nil
         }
         
-        let effectImage = applyEffect(effect, to: ciOriginalImage)
-        let transparentBackground = CIImage(color: .clear).cropped(to: originalExtent)
+        // Generate outline from circle mask
+        guard let circleOutline = generateShapeOutline(from: circleBackground) else { return nil }
+        
+        // Mask person from original image
+        let transparentBackground = CIImage.empty().cropped(to: extent)
+        let maskFilter1 = CIFilter.blendWithMask()
+        maskFilter1.inputImage = original
+        maskFilter1.backgroundImage = transparentBackground
+        maskFilter1.maskImage = mask
+        
+        guard let maskedPerson = maskFilter1.outputImage else { return nil }
+        
+        // Clip person to circle shape
+        let maskFilter2 = CIFilter.blendWithMask()
+        maskFilter2.inputImage = maskedPerson
+        maskFilter2.backgroundImage = transparentBackground
+        maskFilter2.maskImage = circleMask
+        
+        guard let clippedPerson = maskFilter2.outputImage else { return nil }
+        
+        // Composite: background -> outline -> person
+        let composite1 = CIFilter.sourceOverCompositing()
+        composite1.inputImage = circleOutline
+        composite1.backgroundImage = circleBackground
+        
+        guard let bgWithOutline = composite1.outputImage else { return nil }
+        
+        let composite2 = CIFilter.sourceOverCompositing()
+        composite2.inputImage = clippedPerson
+        composite2.backgroundImage = bgWithOutline
+        
+        guard let finalImage = composite2.outputImage else { return nil }
+        return context.createCGImage(finalImage, from: extent)
+    }
+
+    private func applyRectangleBgEffect(original: CIImage, originalImage: UIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
+        guard let boundingBox = try? await detectHumanRectangles(from: originalImage),
+              let rectangleBackground = roundedRectangleToCIImage(boundingBox: boundingBox, cornerRadius: cornerRadius, in: extent),
+              let rectangleMask = createRectangleMask(boundingBox: boundingBox, cornerRadius: cornerRadius, in: extent) else {
+            return nil
+        }
+        
+        // Generate outline from rectangle mask
+        guard let rectangleOutline = generateShapeOutline(from: rectangleBackground) else { return nil }
+        
+        // Mask person from original image
+        let transparentBackground = CIImage.empty().cropped(to: extent)
+        let maskFilter1 = CIFilter.blendWithMask()
+        maskFilter1.inputImage = original
+        maskFilter1.backgroundImage = transparentBackground
+        maskFilter1.maskImage = mask
+        
+        guard let maskedPerson = maskFilter1.outputImage else { return nil }
+        
+        // Clip person to rectangle shape
+        let maskFilter2 = CIFilter.blendWithMask()
+        maskFilter2.inputImage = maskedPerson
+        maskFilter2.backgroundImage = transparentBackground
+        maskFilter2.maskImage = rectangleMask
+        
+        guard let clippedPerson = maskFilter2.outputImage else { return nil }
+        
+        // Composite: background -> outline -> person
+        let composite1 = CIFilter.sourceOverCompositing()
+        composite1.inputImage = rectangleOutline
+        composite1.backgroundImage = rectangleBackground
+        
+        guard let bgWithOutline = composite1.outputImage else { return nil }
+        
+        let composite2 = CIFilter.sourceOverCompositing()
+        composite2.inputImage = clippedPerson
+        composite2.backgroundImage = bgWithOutline
+        
+        guard let finalImage = composite2.outputImage else { return nil }
+        return context.createCGImage(finalImage, from: extent)
+    }
+    
+    private func applyStandardEffect(effect: Effect, original: CIImage, mask: CIImage, extent: CGRect, context: CIContext) -> CGImage? {
+        let effectImage = applyEffect(effect, to: original)
+        let transparentBackground = CIImage(color: .clear).cropped(to: extent)
         let blendFilter = CIFilter.blendWithMask()
         blendFilter.inputImage = effectImage
         blendFilter.backgroundImage = transparentBackground
-        blendFilter.maskImage = ciMaskImage
+        blendFilter.maskImage = mask
         
         guard let outputCIImage = blendFilter.outputImage else { return nil }
         return context.createCGImage(outputCIImage, from: outputCIImage.extent)
@@ -383,7 +499,7 @@ class EffectsPipeline {
     
     private func applyEffect(_ effect: Effect, to image: CIImage) -> CIImage {
         switch effect {
-        case .none, .JFA, .Countours, .CircleBackground, .RectangleBackground:
+        case .none, .JFA, .Countours, .CircleBg, .rectangleBg:
             return image
             
         case .photoEffectProcess:
@@ -470,11 +586,11 @@ struct VisionTests: View {
                 .tint(.blue)
             }
             
-            if pipeline.currentEffect == .Countours {
+            if pipeline.currentEffect == .CircleBg {
                 VStack(spacing: 12) {
                     VStack {
-                        Text("Contour Thickness: \(Int(pipeline.contourThickness))")
-                        Slider(value: $pipeline.contourThickness, in: 1...30) { isEditing in
+                        Text("Circle Radius: \(String(format: "%.2f", pipeline.circleRadiusMultiplier))")
+                        Slider(value: $pipeline.circleRadiusMultiplier, in: 0.5...2.0) { isEditing in
                             if !isEditing {
                                 Task { await pipeline.processImage() }
                             }
@@ -482,8 +598,32 @@ struct VisionTests: View {
                     }
                     
                     VStack {
-                        Text("Path Simplification: \(String(format: "%.3f", pipeline.pathSimplification))")
-                        Slider(value: $pipeline.pathSimplification, in: 0.001...0.05) { isEditing in
+                        Text("Outline Width: \(Int(pipeline.shapeOutlineWidth))")
+                        Slider(value: $pipeline.shapeOutlineWidth, in: 0...20) { isEditing in
+                            if !isEditing {
+                                Task { await pipeline.processImage() }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal)
+                .tint(.blue)
+            }
+            
+            if pipeline.currentEffect == .rectangleBg {
+                VStack(spacing: 12) {
+                    VStack {
+                        Text("Corner Radius: \(Int(pipeline.cornerRadius))")
+                        Slider(value: $pipeline.cornerRadius, in: 0...100) { isEditing in
+                            if !isEditing {
+                                Task { await pipeline.processImage() }
+                            }
+                        }
+                    }
+                    
+                    VStack {
+                        Text("Outline Width: \(Int(pipeline.shapeOutlineWidth))")
+                        Slider(value: $pipeline.shapeOutlineWidth, in: 0...20) { isEditing in
                             if !isEditing {
                                 Task { await pipeline.processImage() }
                             }
@@ -514,7 +654,7 @@ struct VisionTests: View {
             }
             
             Button(action: {
-                if let image = UIImage(named: "Sporty") {
+                if let image = UIImage(named: "Turing") {
                     pipeline.inputImage = image
                     Task { await pipeline.processImage() }
                 }
