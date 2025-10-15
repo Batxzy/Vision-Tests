@@ -191,50 +191,38 @@ class EffectsPipeline {
     var outputImage: UIImage?
     var isProcessing = false
     var currentEffect: Effect = .none
-
-    // Slider properties (use Double for SwiftUI Slider binding)
+    
     var outlineThickness: Double = 15.0
     var outlineWidth: Double = 10.0
-
+    
     enum Effect: String, CaseIterable, Identifiable {
         case none = "None"
         case photoEffectProcess = "Process"
         case JFA = "JumpFlood"
+        case Countours = "countours"
+        case CircleBg = "circle backgroudnd"
+        case rectangleBg = "rectangle backgroudnd"
         case photoEffectNoir = "Noir"
         case photoEffectMono = "Mono"
         case photoEffectTonal = "Tonal"
         case sepiaTone = "Sepia"
         case bloom = "Bloom"
         case gaussianBlur = "Blur"
-
+        
         var id: String { self.rawValue }
     }
-
-    private static let outlineKernel: CIKernel = {
-        do {
-            guard let url = Bundle.main.url(forResource: "default", withExtension: "metallib"),
-                  let data = try? Data(contentsOf: url) else {
-                fatalError("Failed to load default.metallib")
-            }
-            return try CIKernel(functionName: "sdfToOutlineKernel", fromMetalLibraryData: data)
-        } catch {
-            fatalError("Failed to load outline kernel: \(error)")
-        }
-    }()
-
+    
     func processImage() async {
         guard let inputImage = self.inputImage else { return }
-
+        
         isProcessing = true
         defer { isProcessing = false }
-
+        
         do {
-            // Get person mask
             guard let observation = try await generatePersonSegmentation(image: inputImage),
                   let maskCGImage = try? observation.cgImage else { return }
-
-            // Apply effect and update output
-            if let processedImage = applyEffectWithMask(
+            
+            if let processedImage = await applyEffectWithMask(
                 originalImage: inputImage,
                 maskCGImage: maskCGImage,
                 effect: currentEffect
@@ -246,27 +234,109 @@ class EffectsPipeline {
             outputImage = inputImage
         }
     }
-
+    
     private func generatePersonSegmentation(image: UIImage) async throws -> PixelBufferObservation? {
         guard let ciImage = CIImage(image: image) else { return nil }
         let request = GeneratePersonSegmentationRequest()
-        request.qualityLevel = .balanced
+        request.qualityLevel = .accurate  // Highest quality
+        
         return try await request.perform(on: ciImage)
     }
     
-    private func generateJFAOutline(from mask: CIImage) -> CIImage? {
-        let extent = mask.extent
+    private func cleanSegmentationMask(_ maskCGImage: CGImage, targetSize: CGSize) -> CIImage? {
+        var ciMask = CIImage(cgImage: maskCGImage)
         
-        // Use morphology gradient to extract edges - this is FAST and works perfectly
+        // Scale to full resolution
+        ciMask = ciMask.transformed(by: CGAffineTransform(
+            scaleX: targetSize.width / CGFloat(maskCGImage.width),
+            y: targetSize.height / CGFloat(maskCGImage.height)
+        ))
+        
+        // 1. Aggressive threshold to remove ghosting
+        let threshold = CIFilter.colorThreshold()
+        threshold.inputImage = ciMask
+        threshold.threshold = 0.5
+        
+        guard let thresholded = threshold.outputImage else { return nil }
+        
+        // 2. Close small holes
+        let dilate = CIFilter.morphologyMaximum()
+        dilate.inputImage = thresholded
+        dilate.radius = 3.0
+        
+        guard let dilated = dilate.outputImage else { return nil }
+        
+        // 3. Smooth edges
+        let erode = CIFilter.morphologyMinimum()
+        erode.inputImage = dilated
+        erode.radius = 2.0
+        
+        guard let eroded = erode.outputImage else { return nil }
+        
+        // 4. Slight blur for anti-aliasing
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = eroded
+        blur.radius = 1.5
+        
+        return blur.outputImage
+    }
+    
+    private func detectContours(from maskCGImage: CGImage) async throws -> CGPath? {
+        var request = DetectContoursRequest()
+        request.contrastAdjustment = 1.0
+        request.detectsDarkOnLight = false
+        
+        let maskImage = CIImage(cgImage: maskCGImage)
+        let observation = try await request.perform(on: maskImage, orientation: .up)
+        
+        return observation.normalizedPath
+    }
+    
+    
+    private func pathToCIImage(_ path: CGPath, in extent: CGRect, strokeWidth: CGFloat) -> CIImage? {
+        // Use scale of 1.0 to match CIImage coordinate space
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0  // Critical: force scale to 1.0
+        
+        let renderer = UIGraphicsImageRenderer(size: extent.size, format: format)
+        
+        let image = renderer.image { context in
+            context.cgContext.setStrokeColor(UIColor.white.cgColor)
+            context.cgContext.setLineWidth(strokeWidth)
+            context.cgContext.setLineCap(.round)
+            context.cgContext.setLineJoin(.round)
+            
+            // Simple transform for normalized coordinates
+            var transform = CGAffineTransform(scaleX: extent.width, y: -extent.height)
+                .translatedBy(x: 0, y: -1)
+            
+            if let scaledPath = path.copy(using: &transform) {
+                context.cgContext.addPath(scaledPath)
+                context.cgContext.strokePath()
+            }
+        }
+        
+        return CIImage(image: image)
+    }
+    
+    private func generateJFAOutline(from mask: CIImage) -> CIImage? {
+        // 1. Generate outline with morphology gradient
         let morphology = CIFilter.morphologyGradient()
         morphology.inputImage = mask
         morphology.radius = Float(outlineThickness)
         
         guard let edgeImage = morphology.outputImage else { return nil }
         
-        // Multiply with white color to make it visible
+        // 2. Soften the edges with Gaussian blur
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = edgeImage
+        blur.radius = 3.0
+        
+        guard let blurredEdge = blur.outputImage else { return nil }
+        
+        // 3. Make it white
         let colorMatrix = CIFilter.colorMatrix()
-        colorMatrix.inputImage = edgeImage
+        colorMatrix.inputImage = blurredEdge
         colorMatrix.rVector = CIVector(x: 1, y: 1, z: 1, w: 0)
         colorMatrix.gVector = CIVector(x: 1, y: 1, z: 1, w: 0)
         colorMatrix.bVector = CIVector(x: 1, y: 1, z: 1, w: 0)
@@ -274,16 +344,16 @@ class EffectsPipeline {
         
         return colorMatrix.outputImage
     }
-
-    private func applyEffectWithMask(originalImage: UIImage, maskCGImage: CGImage, effect: Effect) -> CGImage? {
+    
+    private func applyEffectWithMask(originalImage: UIImage, maskCGImage: CGImage, effect: Effect) async -> CGImage? {
         guard let ciOriginalImage = CIImage(image: originalImage) else { return nil }
-
-        // Scale mask to match image
+        
         let originalExtent = ciOriginalImage.extent
-        let ciMaskImage = CIImage(cgImage: maskCGImage).transformed(by: CGAffineTransform(
-            scaleX: originalExtent.width / CGFloat(maskCGImage.width),
-            y: originalExtent.height / CGFloat(maskCGImage.height)
-        ))
+        
+        guard let ciMaskImage = cleanSegmentationMask(maskCGImage, targetSize: originalExtent.size) else {
+            return nil
+        }
+        
         
         if effect == .JFA {
             guard let outlineImage = generateJFAOutline(from: ciMaskImage) else { return nil }
@@ -305,31 +375,59 @@ class EffectsPipeline {
             let context = CIContext()
             guard let finalImage = compositeFilter.outputImage else { return nil }
             return context.createCGImage(finalImage, from: originalExtent)
+            
+        }  else if effect == .Countours {
+            let context = CIContext()
+            
+            guard let cleanedMaskCGImage = context.createCGImage(ciMaskImage, from: originalExtent) else {
+                return nil
+            }
+            
+            // Llama a la versión simple de detectContours
+            guard let path = try? await detectContours(from: cleanedMaskCGImage),
+                  let outlineImage = pathToCIImage(path, in: originalExtent, strokeWidth: outlineThickness) else {
+                return nil
+            }
+            
+            let transparentBackground = CIImage.empty().cropped(to: originalExtent)
+            let maskFilter = CIFilter.blendWithMask()
+            maskFilter.inputImage = ciOriginalImage
+            maskFilter.backgroundImage = transparentBackground
+            maskFilter.maskImage = ciMaskImage
+            
+            guard let maskedPersonImage = maskFilter.outputImage else { return nil }
+            
+            let compositeFilter = CIFilter.sourceOverCompositing()
+            compositeFilter.inputImage = maskedPersonImage
+            compositeFilter.backgroundImage = outlineImage
+            
+            guard let finalImage = compositeFilter.outputImage else { return nil }
+            return context.createCGImage(finalImage, from: originalExtent)
         }
-
-        // --- Logic for other effects ---
+        
+        // Other effects
         let effectImage = applyEffect(effect, to: ciOriginalImage)
         let transparentBackground = CIImage(color: .clear).cropped(to: originalExtent)
         let blendFilter = CIFilter.blendWithMask()
         blendFilter.inputImage = effectImage
         blendFilter.backgroundImage = transparentBackground
         blendFilter.maskImage = ciMaskImage
-
+        
         let context = CIContext()
         guard let outputCIImage = blendFilter.outputImage else { return nil }
         return context.createCGImage(outputCIImage, from: outputCIImage.extent)
     }
-
+    
     private func applyEffect(_ effect: Effect, to image: CIImage) -> CIImage {
         switch effect {
-        case .none, .JFA:
+        case .none, .JFA,.Countours:
             return image
             
         case .photoEffectProcess:
             let filter = CIFilter.photoEffectProcess()
             filter.inputImage = image
             return filter.outputImage ?? image
-
+            
         case .photoEffectNoir:
             let filter = CIFilter.photoEffectNoir()
             filter.inputImage = image
@@ -365,15 +463,16 @@ class EffectsPipeline {
             return filter.outputImage ?? image
         }
     }
-
+    
     func changeEffect(to effect: Effect) async {
         currentEffect = effect
         await processImage()
     }
 }
+
 struct VisionTests: View {
     @State private var pipeline = EffectsPipeline()
-
+    
     var body: some View {
         VStack(spacing: 16) {
             // Image display
@@ -395,20 +494,13 @@ struct VisionTests: View {
                         .overlay(Text("Load an image").foregroundColor(.gray))
                 }
             }
-
-            // --- SLIDERS FOR JFA EFFECT ---
+            
+            // Sliders for JFA effect
             if pipeline.currentEffect == .JFA {
                 VStack {
-                    Text("Outline Distance: \(Int(pipeline.outlineThickness))")
+                    Text("Outline Thickness: \(Int(pipeline.outlineThickness))")
                     Slider(value: $pipeline.outlineThickness, in: 1...50) { isEditing in
-                        if !isEditing { // Only process when user lets go
-                            Task { await pipeline.processImage() }
-                        }
-                    }
-
-                    Text("Outline Width: \(Int(pipeline.outlineWidth))")
-                    Slider(value: $pipeline.outlineWidth, in: 1...50) { isEditing in
-                         if !isEditing { // Only process when user lets go
+                        if !isEditing {
                             Task { await pipeline.processImage() }
                         }
                     }
@@ -436,12 +528,12 @@ struct VisionTests: View {
                 }
                 .padding(.horizontal)
             }
-
+            
             // Load image button
             Button(action: {
-                if let image = UIImage(named: "Sports_1") { // Make sure this image is in your Assets
+                if let image = UIImage(named: "Sporty") {
                     pipeline.inputImage = image
-                    Task { await pipeline.processImage() } // Process immediately on load
+                    Task { await pipeline.processImage() }
                 }
             }) {
                 Label("Load Image", systemImage: "photo")
@@ -455,14 +547,8 @@ struct VisionTests: View {
             .disabled(pipeline.isProcessing)
         }
         .padding()
-        .onAppear {
-             if let image = UIImage(named: "Sports_1") { // Auto-load an image
-                pipeline.inputImage = image
-            }
-        }
     }
 }
-
 
 #Preview {
     VisionTests()
