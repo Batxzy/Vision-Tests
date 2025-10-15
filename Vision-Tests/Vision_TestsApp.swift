@@ -11,7 +11,8 @@ import SwiftUI
 struct Vision_TestsApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            VisionTests()
+
         }
     }
 }
