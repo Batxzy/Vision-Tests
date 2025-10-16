@@ -69,14 +69,22 @@ struct FilterSheetView: View {
                 // Image display area
                 Group {
                     if pipeline.isProcessing {
-                        ProgressView().frame(height: 350)
+                        // Give the ProgressView a frame so the layout doesn't jump
+                        ProgressView()
+                            .frame(maxWidth: .infinity, idealHeight: 350)
+
                     } else if let outputImage = pipeline.outputImage {
-                        Image(uiImage: outputImage).resizable().scaledToFit()
+                        // Let the image size itself
+                        Image(uiImage: outputImage)
+                            .resizable()
+                            .scaledToFit()
+
                     } else {
+                        // Give the placeholder a frame
                         Color.gray.opacity(0.1)
+                            .frame(maxWidth: .infinity, idealHeight: 350)
                     }
                 }
-                .frame(maxWidth: .infinity, idealHeight: 350)
                 .padding()
 
                 // Controls for the current effect
