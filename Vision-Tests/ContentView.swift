@@ -1,3 +1,7 @@
+Gfd
+
+
+ 
 import SwiftUI
 
 // MARK: - Main Content View (with TabView)
@@ -69,22 +73,14 @@ struct FilterSheetView: View {
                 // Image display area
                 Group {
                     if pipeline.isProcessing {
-                        // Give the ProgressView a frame so the layout doesn't jump
-                        ProgressView()
-                            .frame(maxWidth: .infinity, idealHeight: 350)
-
+                        ProgressView().frame(height: 350)
                     } else if let outputImage = pipeline.outputImage {
-                        // Let the image size itself
-                        Image(uiImage: outputImage)
-                            .resizable()
-                            .scaledToFit()
-
+                        Image(uiImage: outputImage).resizable().scaledToFit()
                     } else {
-                        // Give the placeholder a frame
                         Color.gray.opacity(0.1)
-                            .frame(maxWidth: .infinity, idealHeight: 350)
                     }
                 }
+                .frame(maxWidth: .infinity, idealHeight: 350)
                 .padding()
 
                 // Controls for the current effect
@@ -134,7 +130,7 @@ struct FilterSheetView: View {
         case .JFA, .Countours:
             VStack {
                 Text("Outline Thickness: \(Int(pipeline.outlineThickness))")
-                Slider(value: $pipeline.outlineThickness, in: 1...50) { isEditing in
+                Slider(value: $pipeline.outlineThickness, in: 1...100) { isEditing in
                     if !isEditing { Task { await pipeline.processImage() } }
                 }
             }
@@ -145,7 +141,7 @@ struct FilterSheetView: View {
             Toggle("Outline on Top", isOn: $pipeline.useThreeLayerEffect).onChange(of: pipeline.useThreeLayerEffect) { Task { await pipeline.processImage() } }
             VStack {
                 Text("Circle Radius: \(String(format: "%.2f", pipeline.circleRadiusMultiplier))")
-                Slider(value: $pipeline.circleRadiusMultiplier, in: 0.5...2.0) { isEditing in
+                Slider(value: $pipeline.circleRadiusMultiplier, in: 0.5...5.0) { isEditing in
                     if !isEditing { Task { await pipeline.processImage() } }
                 }
             }
@@ -219,7 +215,6 @@ struct SavedImagesView: View {
     }
 }
 
-// MARK: - Image Detail View
 struct ImageDetailView: View {
     let image: UIImage
     @State private var scale: CGFloat = 1.0
@@ -239,15 +234,83 @@ struct ImageDetailView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            // Checkerboard pattern for transparency indication
+            TransparencyCheckerboard()
+                .ignoresSafeArea()
             
+            // Image with bounds rectangle overlay
             Image(uiImage: image)
                 .resizable()
                 .scaledToFit()
+                .overlay(
+                    Rectangle()
+                        .stroke(Color.red, lineWidth: 2 / scale)
+                )
                 .scaleEffect(scale)
                 .gesture(magnification)
+            
+            // Debug overlay
+            VStack {
+                Spacer()
+                HStack {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Image Size")
+                            .font(.headline)
+                            .foregroundColor(.black)
+                        Text("Width: \(Int(image.size.width))px")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(.black)
+                        Text("Height: \(Int(image.size.height))px")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(.black)
+                        Text("Scale: \(image.scale)x")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.black.opacity(0.7))
+                        Text("Zoom: \(String(format: "%.2f", scale))x")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.black.opacity(0.7))
+                    }
+                    .padding()
+                    .background(.ultraThinMaterial.opacity(0.8))
+                    .cornerRadius(12)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 20)
+            }
         }
         .navigationTitle("Detail")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
+
+struct TransparencyCheckerboard: View {
+    private let squareSize: CGFloat = 20
+    
+    var body: some View {
+        GeometryReader { geometry in
+            Canvas { context, size in
+                let rows = Int(ceil(size.height / squareSize))
+                let cols = Int(ceil(size.width / squareSize))
+                
+                for row in 0..<rows {
+                    for col in 0..<cols {
+                        let isEven = (row + col) % 2 == 0
+                        let rect = CGRect(
+                            x: CGFloat(col) * squareSize,
+                            y: CGFloat(row) * squareSize,
+                            width: squareSize,
+                            height: squareSize
+                        )
+                        context.fill(
+                            Path(rect),
+                            with: .color(isEven ? Color(red: 0.9, green: 0.95, blue: 1.0) : .white)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+
