@@ -320,6 +320,7 @@ class EffectsPipeline {
         return colorMatrix.outputImage
     }
 
+    // y este como generaba colores
     private func generateShapeOutline(from shape: CIImage, color: Color) -> CIImage? {
         let morphology = CIFilter.morphologyGradient()
         morphology.inputImage = shape
@@ -339,6 +340,139 @@ class EffectsPipeline {
         
         return colorMatrix.outputImage
     }
+    
+     /*private func generateShapeOutline(from shape: CIImage, color: Color) -> CIImage? {
+        // 1. Create the soft-edged gradient, exactly as you had it.
+        let morphology = CIFilter.morphologyGradient()
+        morphology.inputImage = shape
+        morphology.radius = Float(shapeOutlineWidth)
+        guard let edgeImage = morphology.outputImage else { return nil }
+        
+        // 2. THRESHOLD STEP: Convert the soft gradient to a hard edge.
+        // This filter makes every pixel below the threshold black (transparent)
+        // and every pixel above it white (opaque), eliminating the gray areas.
+        let thresholdFilter = CIFilter.colorThreshold()
+        thresholdFilter.inputImage = edgeImage
+        thresholdFilter.threshold = 0.01 // A low value ensures we capture the entire outline.
+        guard let hardEdgeImage = thresholdFilter.outputImage else { return nil }
+        
+        // 3. Color the new hard-edged outline using your original colorMatrix logic.
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        
+        let colorMatrix = CIFilter.colorMatrix()
+        colorMatrix.inputImage = hardEdgeImage // <- We use the thresholded image here.
+        colorMatrix.rVector = CIVector(x: r, y: r, z: r, w: 0)
+        colorMatrix.gVector = CIVector(x: g, y: g, z: g, w: 0)
+        colorMatrix.bVector = CIVector(x: b, y: b, z: b, w: 0)
+        colorMatrix.aVector = CIVector(x: 1, y: 1, z: 1, w: 0)
+        
+        return colorMatrix.outputImage
+    } */
+    
+    
+    /*private func generateShapeOutline(from shape: CIImage, color: Color) -> CIImage? {
+        // 1. Create the soft-edged gradient.
+        let morphology = CIFilter.morphologyGradient()
+        morphology.inputImage = shape
+        morphology.radius = Float(shapeOutlineWidth)
+        guard let edgeImage = morphology.outputImage else { return nil }
+        
+        // 2. Threshold the gradient. The result is a white ring on a solid black background.
+        let thresholdFilter = CIFilter.colorThreshold()
+        thresholdFilter.inputImage = edgeImage
+        thresholdFilter.threshold = 0.01
+        guard let hardEdgeOpaqueMask = thresholdFilter.outputImage else { return nil }
+        
+        // 3. *** THE FIX ***
+        // Convert the mask's luminance to alpha. This crucial step turns the
+        // solid black background into a transparent one, leaving only the white ring.
+        let maskToAlphaFilter = CIFilter.maskToAlpha()
+        maskToAlphaFilter.inputImage = hardEdgeOpaqueMask
+        guard let hardEdgeTransparentMask = maskToAlphaFilter.outputImage else { return nil }
+        
+        // 4. Color the corrected mask. Your colorMatrix logic now works perfectly
+        // because it's operating on a clean mask with a transparent background.
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        
+        let colorMatrix = CIFilter.colorMatrix()
+        colorMatrix.inputImage = hardEdgeTransparentMask // Use the corrected mask
+        colorMatrix.rVector = CIVector(x: r, y: r, z: r, w: 0)
+        colorMatrix.gVector = CIVector(x: g, y: g, z: g, w: 0)
+        colorMatrix.bVector = CIVector(x: b, y: b, z: b, w: 0)
+        colorMatrix.aVector = CIVector(x: 1, y: 1, z: 1, w: 0)
+        
+        return colorMatrix.outputImage
+    } */
+    
+    /*private func generateShapeOutline(from shape: CIImage, color: Color) -> CIImage? {
+        // 1. Create the soft-edged gradient. (No change)
+        let morphology = CIFilter.morphologyGradient()
+        morphology.inputImage = shape
+        morphology.radius = Float(shapeOutlineWidth)
+        guard let edgeImage = morphology.outputImage else { return nil }
+        
+        // 2. Threshold the gradient to get a hard edge. (No change)
+        let thresholdFilter = CIFilter.colorThreshold()
+        thresholdFilter.inputImage = edgeImage
+        thresholdFilter.threshold = 0.01
+        guard let hardEdgeImage = thresholdFilter.outputImage else { return nil }
+        
+        // 3. Color the mask using the colorMatrix.
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        
+        let colorMatrix = CIFilter.colorMatrix()
+        colorMatrix.inputImage = hardEdgeImage
+        
+        // --- FINAL FIX ---
+        // The r, g, and b vectors are zeroed out so that the color comes
+        // purely from the biasVector.
+        colorMatrix.rVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        colorMatrix.gVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        colorMatrix.bVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        
+        // This is the key change. We tell the filter to use the mask's
+        // brightness (we'll use the red channel's value) to set the output alpha.
+        // Black pixels (value 0) will become transparent. White pixels (value 1)
+        // will become opaque.
+        colorMatrix.aVector = CIVector(x: 1, y: 0, z: 0, w: 0) // Use Red channel for Alpha
+        
+        // The biasVector adds our desired color.
+        colorMatrix.biasVector = CIVector(x: r, y: g, z: b, w: 0)
+        
+        return colorMatrix.outputImage
+    } */
+    
+    
+    //esta m gusto como se hizo los colores ya solidos
+    /*private func generateShapeOutline(from shape: CIImage, color: Color) -> CIImage? {
+
+        let morphology = CIFilter.morphologyGradient()
+        morphology.inputImage = shape
+        morphology.radius = Float(shapeOutlineWidth)
+        guard let edgeImage = morphology.outputImage else { return nil }
+        
+        
+        let thresholdFilter = CIFilter.colorThreshold()
+        thresholdFilter.inputImage = edgeImage
+        thresholdFilter.threshold = 0.01
+        guard let hardEdgeMask = thresholdFilter.outputImage else { return nil }
+
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        let solidColor = CIImage(color: CIColor(red: r, green: g, blue: b, alpha: a))
+            .cropped(to: shape.extent)
+            
+        let blendWithMask = CIFilter.blendWithMask()
+        blendWithMask.inputImage = solidColor
+        blendWithMask.backgroundImage = CIImage.clear.cropped(to: shape.extent)
+        blendWithMask.maskImage = hardEdgeMask
+        
+        return blendWithMask.outputImage
+    } */
+    
     
     private func applyEffectWithMask(originalImage: UIImage, maskCGImage: CGImage, effect: Effect) async -> CGImage? {
         guard let ciOriginalImage = CIImage(image: originalImage) else { return nil }
@@ -432,6 +566,24 @@ class EffectsPipeline {
         guard let clippedPerson = maskFilter2.outputImage else { return nil }
         
         if useThreeLayerEffect {
+            // --- CORRECTED LOGIC FOR "OUTLINE ON TOP" ---
+            // 1. Place the outline ON TOP of the background circle.
+            let composite1 = CIFilter.sourceOverCompositing()
+            composite1.inputImage = circleOutline
+            composite1.backgroundImage = circleBackground
+            
+            guard let outlineOnBackground = composite1.outputImage else { return nil }
+            
+            // 2. Place the person ON TOP of the combined outline/background image.
+            let composite2 = CIFilter.sourceOverCompositing()
+            composite2.inputImage = clippedPerson
+            composite2.backgroundImage = outlineOnBackground
+            
+            guard let finalImage = composite2.outputImage else { return nil }
+            return context.createCGImage(finalImage, from: extent)
+        } else {
+            // This is the logic for when the outline is behind the background.
+            // It remains the same as the previous fix.
             let composite1 = CIFilter.sourceOverCompositing()
             composite1.inputImage = clippedPerson
             composite1.backgroundImage = circleBackground
@@ -439,21 +591,8 @@ class EffectsPipeline {
             guard let bgWithPerson = composite1.outputImage else { return nil }
             
             let composite2 = CIFilter.sourceOverCompositing()
-            composite2.inputImage = circleOutline
-            composite2.backgroundImage = bgWithPerson
-            
-            guard let finalImage = composite2.outputImage else { return nil }
-            return context.createCGImage(finalImage, from: extent)
-        } else {
-            let composite1 = CIFilter.sourceOverCompositing()
-            composite1.inputImage = circleOutline
-            composite1.backgroundImage = circleBackground
-            
-            guard let bgWithOutline = composite1.outputImage else { return nil }
-            
-            let composite2 = CIFilter.sourceOverCompositing()
-            composite2.inputImage = clippedPerson
-            composite2.backgroundImage = bgWithOutline
+            composite2.inputImage = bgWithPerson
+            composite2.backgroundImage = circleOutline
             
             guard let finalImage = composite2.outputImage else { return nil }
             return context.createCGImage(finalImage, from: extent)
@@ -660,7 +799,7 @@ struct VisionTests: View {
                     
                     VStack {
                         Text("Outline Width: \(Int(pipeline.shapeOutlineWidth))")
-                        Slider(value: $pipeline.shapeOutlineWidth, in: 0...20) { isEditing in
+                        Slider(value: $pipeline.shapeOutlineWidth, in: 0...100) { isEditing in
                             if !isEditing {
                                 Task { await pipeline.processImage() }
                             }
@@ -699,7 +838,7 @@ struct VisionTests: View {
                     
                     VStack {
                         Text("Outline Width: \(Int(pipeline.shapeOutlineWidth))")
-                        Slider(value: $pipeline.shapeOutlineWidth, in: 0...20) { isEditing in
+                        Slider(value: $pipeline.shapeOutlineWidth, in: 0...100) { isEditing in
                             if !isEditing {
                                 Task { await pipeline.processImage() }
                             }
@@ -740,7 +879,7 @@ struct VisionTests: View {
             }
             
             Button(action: {
-                if let image = UIImage(named: "Sports_4") {
+                if let image = UIImage(named: "Kpop") {
                     pipeline.inputImage = image
                     Task { await pipeline.processImage() }
                 }
