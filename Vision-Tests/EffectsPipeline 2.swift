@@ -1,5 +1,5 @@
 //
-//  EffectsPipeline.swift
+//  EffectsPipeline 2.swift
 //  Vision-Tests
 //
 //  Created by Jose julian Lopez on 15/10/25.
@@ -11,14 +11,12 @@ import Vision
 import CoreImage.CIFilterBuiltins
 
 @Observable
-class EffectsPipeline {
-    // MARK: - State Properties
+class EffectsPipeline_OG {
     var inputImage: UIImage?
     var outputImage: UIImage?
     var isProcessing = false
     var currentEffect: Effect = .none
     
-    // MARK: - Effect Parameters
     var outlineThickness: Double = 15.0
     var cornerRadius: Double = 20.0
     var circleRadiusMultiplier: Double = 1.1
@@ -28,53 +26,45 @@ class EffectsPipeline {
     var useThreeLayerEffect: Bool = false
     
     enum Effect: String, CaseIterable, Identifiable {
-        case none = "None", photoEffectProcess = "Process", JFA = "JumpFlood",
-             Countours = "Contours", CircleBg = "Circle BG", rectangleBg = "Rectangle BG",
-             photoEffectNoir = "Noir", photoEffectMono = "Mono", photoEffectTonal = "Tonal",
-             sepiaTone = "Sepia", bloom = "Bloom", gaussianBlur = "Blur"
+        case none = "None"
+        case photoEffectProcess = "Process"
+        case JFA = "JumpFlood"
+        case Countours = "contours"
+        case CircleBg = "circle background"
+        case rectangleBg = "rectangle background"
+        case photoEffectNoir = "Noir"
+        case photoEffectMono = "Mono"
+        case photoEffectTonal = "Tonal"
+        case sepiaTone = "Sepia"
+        case bloom = "Bloom"
+        case gaussianBlur = "Blur"
+        
         var id: String { self.rawValue }
     }
     
-    /// Resets the pipeline's state, clearing any loaded images.
-    func reset() {
-        inputImage = nil
-        outputImage = nil
-        currentEffect = .none
-        isProcessing = false
-    }
-
-    /// Sets a new effect and triggers processing.
-    func changeEffect(to effect: Effect) async {
-        currentEffect = effect
-        await processImage()
-    }
-    
-    // MARK: - Core Processing Logic (No changes from your original logic)
-    
     func processImage() async {
         guard let inputImage = self.inputImage else { return }
+        
         isProcessing = true
         defer { isProcessing = false }
         
         do {
-            let request = GeneratePersonSegmentationRequest()
-            request.qualityLevel = .accurate
-            let observation = try await request.perform(on: CIImage(image: inputImage)!)
+            guard let observation = try await generatePersonSegmentation(image: inputImage),
+                  let maskCGImage = try? observation.cgImage else { return }
             
-            guard let maskCGImage = try? observation.cgImage else {
-                outputImage = inputImage; return
-            }
-            
-            if let processedImage = await applyEffectWithMask(originalImage: inputImage, maskCGImage: maskCGImage, effect: currentEffect) {
+            if let processedImage = await applyEffectWithMask(
+                originalImage: inputImage,
+                maskCGImage: maskCGImage,
+                effect: currentEffect
+            ) {
                 outputImage = UIImage(cgImage: processedImage)
             }
         } catch {
-            print("Error processing image: \(error)"); outputImage = inputImage
+            print("Error processing image: \(error)")
+            outputImage = inputImage
         }
     }
-
-    // MARK: - Funciones que se comunican con Vision y cositas
-
+    
     private func generatePersonSegmentation(image: UIImage) async throws -> PixelBufferObservation? {
         guard let ciImage = CIImage(image: image) else { return nil }
         let request = GeneratePersonSegmentationRequest()
@@ -681,6 +671,7 @@ class EffectsPipeline {
         guard let outputCIImage = blendFilter.outputImage else { return nil }
         return context.createCGImage(outputCIImage, from: outputCIImage.extent)
     }
+    
     private func applyEffect(_ effect: Effect, to image: CIImage) -> CIImage {
         switch effect {
         case .none, .JFA, .Countours, .CircleBg, .rectangleBg:
@@ -725,5 +716,10 @@ class EffectsPipeline {
             filter.radius = 5
             return filter.outputImage ?? image
         }
+    }
+    
+    func changeEffect(to effect: Effect) async {
+        currentEffect = effect
+        await processImage()
     }
 }
