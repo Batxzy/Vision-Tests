@@ -6,7 +6,7 @@ import CoreImage.CIFilterBuiltins
 
 
 struct VisionTests: View {
-    @State private var pipeline = EffectsPipeline()
+    @State private var pipeline = EffectsPipeline_OG()
     
     var body: some View {
         VStack(spacing: 16) {
@@ -149,7 +149,7 @@ struct VisionTests: View {
             
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack {
-                    ForEach(EffectsPipeline.Effect.allCases) { effect in
+                    ForEach(EffectsPipeline_OG.Effect.allCases) { effect in
                         Button(action: {
                             Task { await pipeline.changeEffect(to: effect) }
                         }) {
