@@ -35,7 +35,7 @@ class EffectsPipeline {
         var id: String { self.rawValue }
     }
     
-    /// Resets the pipeline's state, clearing any loaded images.
+    // Resets the pipeline's state, clearing any loaded images.
     func reset() {
         inputImage = nil
         outputImage = nil
@@ -43,7 +43,7 @@ class EffectsPipeline {
         isProcessing = false
     }
 
-    /// Sets a new effect and triggers processing.
+    // Sets a new effect and triggers processing.
     func changeEffect(to effect: Effect) async {
         currentEffect = effect
         await processImage()
@@ -624,7 +624,7 @@ class EffectsPipeline {
         let totalVisibleDiameter = circleDiameter + outlineExpansion
         
         // Target: fill 95% of canvas (leaving 50px margin all around)
-        let targetDiameter: CGFloat = 1900
+        let targetDiameter: CGFloat = 2000
         let fillScale = targetDiameter / totalVisibleDiameter
         
         let scaledOriginal = original.transformed(by: CGAffineTransform(scaleX: fillScale, y: fillScale))
