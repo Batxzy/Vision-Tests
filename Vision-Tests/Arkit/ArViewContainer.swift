@@ -51,37 +51,69 @@ struct ARViewContainer : UIViewRepresentable {
     
     
     func updateUIView(_ uiView: ARView, context: Context) {
+            print("\n🔄 updateUIView called")
+            
+            // Limpiar escena
+            uiView.scene.anchors.removeAll()
+            print("🧹 Cleared previous anchors")
+            
+            // Validar que hay imagen seleccionada
+            guard let selectedIndex = imageManager.selectedStickerIndex,
+                  selectedIndex < imageManager.savedImages.count else {
+                print("⚠️ No sticker selected or invalid index")
+                return
+            }
+            
+            print("📸 Creating sticker for index: \(selectedIndex)")
+            
+            // Crear el sticker
+            if let stickerEntity = createStickerEntity(from: imageManager.savedImages[selectedIndex]) {
+                let anchor = AnchorEntity(plane: .vertical)
+                anchor.addChild(stickerEntity)
+                uiView.scene.addAnchor(anchor)
+                print("✅ Sticker added to scene successfully!\n")
+            } else {
+                print("❌ Failed to create sticker entity\n")
+            }
+        }
         
-        let anchorEntity = AnchorEntity(plane: .vertical)
-        
-    
-        // Validar índice
-           guard let selectedIndex = imageManager.selectedStickerIndex,
-                 selectedIndex < imageManager.savedImages.count else { return }
-           
-           // Obtener imagen (ya no es opcional porque validamos el índice)
-           let stickerImage = imageManager.savedImages[selectedIndex]
-           
-           // Obtener CGImage
-           guard let cgImage = stickerImage.cgImage else { return }
-           
-           // Crear textura y material
-        guard let texture = try? TextureResource(image: cgImage, options: .init(semantic: .color)) else { return }
-           
-           var material = UnlitMaterial()
-           material.color = .init(tint: .white, texture: .init(texture))
-           
-           // Crear plano con aspect ratio correcto
-           let width: Float = 0.3
-           let aspectRatio = Float(stickerImage.size.height / stickerImage.size.width)
-           let planeMesh = MeshResource.generatePlane(width: width, height: width * aspectRatio)
-        
-        let stickerEntity = ModelEntity(mesh: planeMesh, materials: [material])
-        
-            anchorEntity.addChild(stickerEntity)
-            uiView.scene.addAnchor(anchorEntity)
-        
+        // Método helper separado para crear el sticker
+        private func createStickerEntity(from image: UIImage) -> ModelEntity? {
+            print("  🖼️  Image size: \(Int(image.size.width))x\(Int(image.size.height))")
+            
+            // Obtener CGImage
+            guard let cgImage = image.cgImage else {
+                print("  ❌ Failed to get CGImage")
+                return nil
+            }
+            print("  ✅ CGImage obtained")
+            
+            // Crear textura
+            guard let texture = try? TextureResource(
+                image: cgImage,
+                options: .init(semantic: .color)
+            ) else {
+                print("  ❌ Failed to create TextureResource")
+                return nil
+            }
+            print("  ✅ TextureResource created")
+            
+            // Crear material
+            var material = UnlitMaterial()
+            material.color = .init(tint: .white, texture: .init(texture))
+            print("  ✅ Material created")
+            
+            // Calcular dimensiones con aspect ratio
+            let width: Float = 0.3
+            let aspectRatio = Float(image.size.height / image.size.width)
+            let height = width * aspectRatio
+            print("  📐 Plane dimensions: \(width)m x \(height)m (aspect: \(String(format: "%.2f", aspectRatio)))")
+            
+            // Crear plano y entity
+            let planeMesh = MeshResource.generatePlane(width: width, height: height)
+            let modelEntity = ModelEntity(mesh: planeMesh, materials: [material])
+            
+            print("  ✅ ModelEntity created successfully")
+            return modelEntity
+        }
     }
-    
-        
-}
