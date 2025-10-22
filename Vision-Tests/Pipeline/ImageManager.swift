@@ -12,7 +12,6 @@ import SwiftUI
 class ImageManager {
     let sourceImages: [String] = ["Kpop", "Rosalia", "Soccer_3", "Soccer_5", "Sports_4", "Sporty"]
     var savedImages: [UIImage] = []
-    
     var selectedStickerIndex: Int? = nil
     
     func saveImage(_ image: UIImage) {

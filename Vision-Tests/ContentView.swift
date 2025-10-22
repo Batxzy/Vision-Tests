@@ -194,7 +194,7 @@ struct SavedImagesView: View {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 16) {
                             ForEach(imageManager.savedImages.indices, id: \.self) { index in
-                                NavigationLink(destination: ImageDetailView(image: imageManager.savedImages[index])) {
+                                NavigationLink(destination: ImageDetailView(image: imageManager.savedImages[index], imageIndex: index)) {  // ← Pasamos el índice
                                     Image(uiImage: imageManager.savedImages[index])
                                         .resizable().aspectRatio(contentMode: .fill)
                                         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
@@ -214,6 +214,10 @@ struct SavedImagesView: View {
 
 struct ImageDetailView: View {
     let image: UIImage
+    let imageIndex: Int  // ← Nuevo: para saber qué imagen seleccionar
+    
+    @Environment(ImageManager.self) var imageManager
+    @State private var showARMode = false
     @State private var scale: CGFloat = 1.0
     @State private var lastScaleValue: CGFloat = 1.0
 
@@ -231,11 +235,9 @@ struct ImageDetailView: View {
 
     var body: some View {
         ZStack {
-            // Checkerboard pattern for transparency indication
             TransparencyCheckerboard()
                 .ignoresSafeArea()
             
-            // Image with bounds rectangle overlay
             Image(uiImage: image)
                 .resizable()
                 .scaledToFit()
@@ -260,9 +262,6 @@ struct ImageDetailView: View {
                         Text("Height: \(Int(image.size.height))px")
                             .font(.system(.body, design: .monospaced))
                             .foregroundColor(.black)
-                        Text("Scale: \(image.scale)x")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.black.opacity(0.7))
                         Text("Zoom: \(String(format: "%.2f", scale))x")
                             .font(.system(.caption, design: .monospaced))
                             .foregroundColor(.black.opacity(0.7))
@@ -278,6 +277,19 @@ struct ImageDetailView: View {
         }
         .navigationTitle("Detail")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    imageManager.selectSticker(at: imageIndex)
+                    showARMode = true
+                } label: {
+                    Label("View in AR", systemImage: "arkit")
+                }
+            }
+        }
+        .fullScreenCover(isPresented: $showARMode) {
+            ARModeView()
+        }
     }
 }
 
