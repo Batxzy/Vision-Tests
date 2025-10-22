@@ -6,13 +6,8 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		8CC3CE7C2EA8C96A00D48DD3 /* allive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CC3CE7B2EA8C96A00D48DD3 /* allive.swift */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXFileReference section */
 		8C851D502E9F9C620067BA06 /* Vision-Tests.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Vision-Tests.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		8CC3CE7B2EA8C96A00D48DD3 /* allive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = allive.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -37,7 +32,6 @@
 		8C851D472E9F9C620067BA06 = {
 			isa = PBXGroup;
 			children = (
-				8CC3CE7B2EA8C96A00D48DD3 /* allive.swift */,
 				8C851D522E9F9C620067BA06 /* Vision-Tests */,
 				8C851D512E9F9C620067BA06 /* Products */,
 			);
@@ -125,7 +119,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				8CC3CE7C2EA8C96A00D48DD3 /* allive.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

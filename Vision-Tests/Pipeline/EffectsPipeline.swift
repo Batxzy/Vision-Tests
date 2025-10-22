@@ -167,8 +167,6 @@ class EffectsPipeline {
         let request = GenerateAttentionBasedSaliencyImageRequest()
         let observation = try await request.perform(on: ciImage)
         
-        // salientObjects is [RectangleObservation]
-        // RectangleObservation conforms to BoundingBoxProviding
         let salientObjects = observation.salientObjects
         guard !salientObjects.isEmpty else { return nil }
         
