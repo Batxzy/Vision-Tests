@@ -20,7 +20,7 @@ class EffectsPipeline {
     
     // MARK: - Effect Parameters
     var outlineThickness: Double = 15.0
-    var cornerRadius: Double = 20.0
+    var cornerRadius: Double = 5.0
     var circleRadiusMultiplier: Double = 1.1
     var shapeOutlineWidth: Double = 5.0
     var backgroundColor: Color = .white
@@ -266,7 +266,9 @@ class EffectsPipeline {
                 height: paddedBox.height * extent.height
             )
             
-            let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius)
+            // Scale corner radius: 1-10 scale → 30-300px
+            let scaledCornerRadius = cornerRadius * 30
+            let path = UIBezierPath(roundedRect: rect, cornerRadius: scaledCornerRadius)
             
             context.cgContext.setFillColor(color.cgColor)
             context.cgContext.addPath(path.cgPath)
@@ -275,6 +277,7 @@ class EffectsPipeline {
         
         return CIImage(image: image)
     }
+
     
     private func createCircleMask(boundingBox: CGRect, in extent: CGRect) -> CIImage? {
         let format = UIGraphicsImageRendererFormat()
@@ -326,7 +329,9 @@ class EffectsPipeline {
                 height: paddedBox.height * extent.height
             )
             
-            let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius)
+            // Scale corner radius: 1-10 scale → 30-300px
+            let scaledCornerRadius = cornerRadius * 30
+            let path = UIBezierPath(roundedRect: rect, cornerRadius: scaledCornerRadius)
             
             context.cgContext.setFillColor(UIColor.white.cgColor)
             context.cgContext.addPath(path.cgPath)
@@ -540,10 +545,10 @@ class EffectsPipeline {
         
         switch effect {
         case .JFA:
-            return await applyJFAEffect(original: ciOriginalImage, mask: ciMaskImage, extent: originalExtent, context: context)
+            return await applyJFAEffect(original: ciOriginalImage, originalImage: originalImage, mask: ciMaskImage, extent: originalExtent, context: context)
             
         case .Countours:
-            return await applyContoursEffect(original: ciOriginalImage, mask: ciMaskImage, extent: originalExtent, context: context)
+            return await applyContoursEffect(original: ciOriginalImage, originalImage: originalImage, mask: ciMaskImage, extent: originalExtent, context: context)
             
         case .CircleBg:
             return await applyCircleBgEffect(original: ciOriginalImage, originalImage: originalImage, mask: ciMaskImage, extent: originalExtent, context: context)
@@ -556,14 +561,34 @@ class EffectsPipeline {
         }
     }
     
-    private func applyJFAEffect(original: CIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
-        guard let outlineImage = generateJFAOutline(from: mask, color: outlineColor) else { return nil }
+    private func applyJFAEffect(original: CIImage, originalImage: UIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
+        let canvasSize: CGFloat = 2000
+        let canvasExtent = CGRect(x: 0, y: 0, width: canvasSize, height: canvasSize)
         
-        let transparentBackground = CIImage.empty().cropped(to: extent)
+        let targetSize = canvasSize * 0.9
+        let scale = min(targetSize / extent.width, targetSize / extent.height)
+        
+        let scaledOriginal = original.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let scaledMask = mask.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        
+        let scaledExtent = scaledOriginal.extent
+        
+        let offsetX = (canvasSize - scaledExtent.width) / 2
+        let offsetY = (canvasSize - scaledExtent.height) / 2
+        
+        let centeredOriginal = scaledOriginal.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
+        let centeredMask = scaledMask.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
+        
+        let blackBackground = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1)).cropped(to: canvasExtent)
+        let expandedMask = centeredMask.composited(over: blackBackground)
+        
+        guard let outlineImage = generateJFAOutline(from: expandedMask, color: outlineColor) else { return nil }
+        
+        let transparentBackground = CIImage.empty().cropped(to: canvasExtent)
         let maskFilter = CIFilter.blendWithMask()
-        maskFilter.inputImage = original
+        maskFilter.inputImage = centeredOriginal
         maskFilter.backgroundImage = transparentBackground
-        maskFilter.maskImage = mask
+        maskFilter.maskImage = centeredMask
         
         guard let maskedPersonImage = maskFilter.outputImage else { return nil }
         
@@ -572,21 +597,41 @@ class EffectsPipeline {
         compositeFilter.backgroundImage = outlineImage
         
         guard let finalImage = compositeFilter.outputImage else { return nil }
-        return context.createCGImage(finalImage, from: extent)
+        return context.createCGImage(finalImage, from: canvasExtent)
     }
     
-    private func applyContoursEffect(original: CIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
-        guard let cleanedMaskCGImage = context.createCGImage(mask, from: extent),
+    private func applyContoursEffect(original: CIImage, originalImage: UIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
+        let canvasSize: CGFloat = 2000
+        let canvasExtent = CGRect(x: 0, y: 0, width: canvasSize, height: canvasSize)
+        
+        // Leave margin for outline - scale to 90% of canvas
+        let targetSize = canvasSize * 0.9
+        let scale = min(targetSize / extent.width, targetSize / extent.height)
+        
+        let scaledOriginal = original.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let scaledMask = mask.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        
+        let scaledExtent = scaledOriginal.extent
+        
+        // Center on canvas
+        let offsetX = (canvasSize - scaledExtent.width) / 2
+        let offsetY = (canvasSize - scaledExtent.height) / 2
+        
+        let centeredOriginal = scaledOriginal.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
+        let centeredMask = scaledMask.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
+        
+        // Detect contours from the centered mask
+        guard let cleanedMaskCGImage = context.createCGImage(centeredMask, from: canvasExtent),
               let path = try? await detectContours(from: cleanedMaskCGImage),
-              let outlineImage = pathToCIImage(path, in: extent, strokeWidth: outlineThickness, color: UIColor(outlineColor)) else {
+              let outlineImage = pathToCIImage(path, in: canvasExtent, strokeWidth: outlineThickness, color: UIColor(outlineColor)) else {
             return nil
         }
         
-        let transparentBackground = CIImage.empty().cropped(to: extent)
+        let transparentBackground = CIImage.empty().cropped(to: canvasExtent)
         let maskFilter = CIFilter.blendWithMask()
-        maskFilter.inputImage = original
+        maskFilter.inputImage = centeredOriginal
         maskFilter.backgroundImage = transparentBackground
-        maskFilter.maskImage = mask
+        maskFilter.maskImage = centeredMask
         
         guard let maskedPersonImage = maskFilter.outputImage else { return nil }
         
@@ -595,7 +640,7 @@ class EffectsPipeline {
         compositeFilter.backgroundImage = outlineImage
         
         guard let finalImage = compositeFilter.outputImage else { return nil }
-        return context.createCGImage(finalImage, from: extent)
+        return context.createCGImage(finalImage, from: canvasExtent)
     }
 
     
@@ -696,20 +741,10 @@ class EffectsPipeline {
     }
     
     private func applyRectangleBgEffect(original: CIImage, originalImage: UIImage, mask: CIImage, extent: CGRect, context: CIContext) async -> CGImage? {
-        // Fixed canvas size
         let canvasSize: CGFloat = 2000
         let canvasExtent = CGRect(x: 0, y: 0, width: canvasSize, height: canvasSize)
         
-        // Calculate offset to center original image
-        let offsetX = (canvasSize - extent.width) / 2
-        let offsetY = (canvasSize - extent.height) / 2
-        
-        // Center images on canvas
-        let centeredOriginal = original.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
-        let centeredMask = mask.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
-        
-        // Detect human rectangles and adjust bounding box
-        guard let detectedBox = try? await detectHumanRectangles(from: originalImage) else { return nil }
+        guard let detectedBox = try? await detectSaliency(from: originalImage) else { return nil }
         
         let pixelBox = CGRect(
             x: detectedBox.minX * extent.width,
@@ -718,11 +753,41 @@ class EffectsPipeline {
             height: detectedBox.height * extent.height
         )
         
+       
+        let personSize = max(pixelBox.width, pixelBox.height)
+        let rectangleSize = personSize * 1.1
+        
+        // El outline expande hacia afuera
+        let outlineExpansion = shapeOutlineWidth * 2
+        let totalVisibleSize = rectangleSize + outlineExpansion
+        
+        // Escalar para llenar el canvas
+        let targetSize: CGFloat = 2000
+        let fillScale = targetSize / totalVisibleSize
+        
+        let scaledOriginal = original.transformed(by: CGAffineTransform(scaleX: fillScale, y: fillScale))
+        let scaledMask = mask.transformed(by: CGAffineTransform(scaleX: fillScale, y: fillScale))
+        
+        let scaledPixelBox = CGRect(
+            x: pixelBox.minX * fillScale,
+            y: pixelBox.minY * fillScale,
+            width: pixelBox.width * fillScale,
+            height: pixelBox.height * fillScale
+        )
+        
+        // Centrar en el canvas
+        let offsetX = (canvasSize / 2) - scaledPixelBox.midX
+        let offsetY = (canvasSize / 2) - scaledPixelBox.midY
+        
+        let centeredOriginal = scaledOriginal.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
+        let centeredMask = scaledMask.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
+        
+        // Convertir a coordenadas normalizadas del canvas
         let centeredBox = CGRect(
-            x: (pixelBox.minX + offsetX) / canvasSize,
-            y: (pixelBox.minY + offsetY) / canvasSize,
-            width: pixelBox.width / canvasSize,
-            height: pixelBox.height / canvasSize
+            x: (scaledPixelBox.minX + offsetX) / canvasSize,
+            y: (scaledPixelBox.minY + offsetY) / canvasSize,
+            width: scaledPixelBox.width / canvasSize,
+            height: scaledPixelBox.height / canvasSize
         )
         
         guard let rectangleBackground = roundedRectangleToCIImage(boundingBox: centeredBox, cornerRadius: cornerRadius, in: canvasExtent, color: UIColor(backgroundColor)),
@@ -730,6 +795,7 @@ class EffectsPipeline {
             return nil
         }
         
+        // El outline se genera del fondo, no de la máscara de segmentación
         guard let rectangleOutline = generateShapeOutline(from: rectangleBackground, color: outlineColor) else { return nil }
         
         let transparentBackground = CIImage.empty().cropped(to: canvasExtent)
@@ -750,10 +816,10 @@ class EffectsPipeline {
         
         let composite1 = CIFilter.sourceOverCompositing()
         if useThreeLayerEffect {
-            composite1.inputImage = clippedPerson
+            composite1.inputImage = rectangleOutline
             composite1.backgroundImage = rectangleBackground
         } else {
-            composite1.inputImage = rectangleOutline
+            composite1.inputImage = clippedPerson
             composite1.backgroundImage = rectangleBackground
         }
         
@@ -761,11 +827,11 @@ class EffectsPipeline {
         
         let composite2 = CIFilter.sourceOverCompositing()
         if useThreeLayerEffect {
-            composite2.inputImage = rectangleOutline
-            composite2.backgroundImage = layer1
-        } else {
             composite2.inputImage = clippedPerson
             composite2.backgroundImage = layer1
+        } else {
+            composite2.inputImage = layer1
+            composite2.backgroundImage = rectangleOutline
         }
         
         guard let finalImage = composite2.outputImage else { return nil }
@@ -783,6 +849,7 @@ class EffectsPipeline {
         guard let outputCIImage = blendFilter.outputImage else { return nil }
         return context.createCGImage(outputCIImage, from: outputCIImage.extent)
     }
+    
     private func applyEffect(_ effect: Effect, to image: CIImage) -> CIImage {
         switch effect {
         case .none, .JFA, .Countours, .CircleBg, .rectangleBg:

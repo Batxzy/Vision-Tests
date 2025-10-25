@@ -117,8 +117,7 @@ struct FilterSheetView: View {
         }
     }
 
-    /// A view that dynamically shows controls based on the selected effect.
-    /// It now accepts a bindable pipeline.
+    
     @ViewBuilder
     private func effectControls(for pipeline: EffectsPipeline) -> some View {
         @Bindable var pipeline = pipeline
@@ -148,7 +147,7 @@ struct FilterSheetView: View {
             Toggle("Outline on Top", isOn: $pipeline.useThreeLayerEffect).onChange(of: pipeline.useThreeLayerEffect) { Task { await pipeline.processImage() } }
             VStack {
                 Text("Corner Radius: \(Int(pipeline.cornerRadius))")
-                Slider(value: $pipeline.cornerRadius, in: 0...100) { isEditing in
+                Slider(value: $pipeline.cornerRadius, in: 1...20) { isEditing in
                     if !isEditing { Task { await pipeline.processImage() } }
                 }
             }
