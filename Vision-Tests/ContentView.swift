@@ -214,10 +214,11 @@ struct SavedImagesView: View {
 
 struct ImageDetailView: View {
     let image: UIImage
-    let imageIndex: Int  // ← Nuevo: para saber qué imagen seleccionar
+    let imageIndex: Int
     
     @Environment(ImageManager.self) var imageManager
     @State private var showARMode = false
+    @State private var showPreview = false  // ← Te faltaba esta línea
     @State private var scale: CGFloat = 1.0
     @State private var lastScaleValue: CGFloat = 1.0
 
@@ -279,13 +280,26 @@ struct ImageDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    imageManager.selectSticker(at: imageIndex)
-                    showARMode = true
+                Menu {
+                    Button {
+                        showPreview = true
+                    } label: {
+                        Label("Test Texture", systemImage: "wrench.and.screwdriver")
+                    }
+                    
+                    Button {
+                        imageManager.selectSticker(at: imageIndex)
+                        showARMode = true
+                    } label: {
+                        Label("View in AR", systemImage: "arkit")
+                    }
                 } label: {
-                    Label("View in AR", systemImage: "arkit")
+                    Image(systemName: "ellipsis.circle")
                 }
             }
+        }
+        .sheet(isPresented: $showPreview) {
+            StickerPreviewView(image: image)
         }
         .fullScreenCover(isPresented: $showARMode) {
             ARModeView()

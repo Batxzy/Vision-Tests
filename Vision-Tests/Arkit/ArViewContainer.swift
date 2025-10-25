@@ -32,8 +32,6 @@ struct ARViewContainer : UIViewRepresentable {
             config.planeDetection = .vertical
         
             config.isLightEstimationEnabled = true
-        
-            config.sceneReconstruction = .mesh
                
             config.frameSemantics = .personSegmentationWithDepth
         
@@ -41,7 +39,9 @@ struct ARViewContainer : UIViewRepresentable {
             //esto crea la session de ar kit en si
             arView.session.run(config)
         
-           return ARView()
+        arView.addCoaching()
+        
+        return arView
        }
     
     
@@ -69,8 +69,11 @@ struct ARViewContainer : UIViewRepresentable {
             // Crear el sticker
             if let stickerEntity = createStickerEntity(from: imageManager.savedImages[selectedIndex]) {
                 let anchor = AnchorEntity(plane: .vertical)
+                
                 anchor.addChild(stickerEntity)
+                
                 uiView.scene.addAnchor(anchor)
+                
                 print("✅ Sticker added to scene successfully!\n")
             } else {
                 print("❌ Failed to create sticker entity\n")
@@ -117,3 +120,26 @@ struct ARViewContainer : UIViewRepresentable {
             return modelEntity
         }
     }
+
+
+extension ARView {
+    
+    func addCoaching() {
+        let coachingOverlay = ARCoachingOverlayView()
+    
+        coachingOverlay.goal = .verticalPlane
+        coachingOverlay.session = self.session
+        
+        coachingOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        
+        self.addSubview(coachingOverlay)
+        
+        coachingOverlay.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            coachingOverlay.topAnchor.constraint(equalTo: self.topAnchor),
+            coachingOverlay.bottomAnchor.constraint(equalTo: self.bottomAnchor),
+            coachingOverlay.leadingAnchor.constraint(equalTo: self.leadingAnchor),
+            coachingOverlay.trailingAnchor.constraint(equalTo: self.trailingAnchor)
+        ])
+    }
+}
