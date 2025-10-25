@@ -80,8 +80,7 @@ struct ARViewContainer : UIViewRepresentable {
             ) {
                 let anchor = AnchorEntity(world: firstResult.worldTransform)
                 
-                // ✅ Rotar el sticker para que quede pegado a la pared
-                // Por defecto el plano está en XY, necesitamos rotarlo para que mire hacia afuera
+              
                 stickerEntity.orientation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
                 stickerEntity.transform.rotation = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
                             
@@ -112,6 +111,9 @@ struct ARViewContainer : UIViewRepresentable {
             material.baseColor = .init(tint: .white, texture: .init(texture))
             material.metallic = .init(floatLiteral: 0.0)
             material.roughness = .init(floatLiteral: 1.0)
+            material.emissiveColor = .init(texture: .init(texture))
+            material.emissiveIntensity = 0.6
+
             
             // ✅ La clave: activar transparencia con blending
             material.blending = .transparent(opacity: 1.0)
