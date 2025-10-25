@@ -573,15 +573,14 @@ class EffectsPipeline_OG {
         guard let clippedPerson = maskFilter2.outputImage else { return nil }
         
         if useThreeLayerEffect {
-            // --- CORRECTED LOGIC FOR "OUTLINE ON TOP" ---
-            // 1. Place the outline ON TOP of the background circle.
+            
             let composite1 = CIFilter.sourceOverCompositing()
             composite1.inputImage = circleOutline
             composite1.backgroundImage = circleBackground
             
             guard let outlineOnBackground = composite1.outputImage else { return nil }
             
-            // 2. Place the person ON TOP of the combined outline/background image.
+            
             let composite2 = CIFilter.sourceOverCompositing()
             composite2.inputImage = clippedPerson
             composite2.backgroundImage = outlineOnBackground
@@ -589,8 +588,7 @@ class EffectsPipeline_OG {
             guard let finalImage = composite2.outputImage else { return nil }
             return context.createCGImage(finalImage, from: extent)
         } else {
-            // This is the logic for when the outline is behind the background.
-            // It remains the same as the previous fix.
+            
             let composite1 = CIFilter.sourceOverCompositing()
             composite1.inputImage = clippedPerson
             composite1.backgroundImage = circleBackground
