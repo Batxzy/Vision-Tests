@@ -11,115 +11,124 @@ import ARKit
 
 struct ARViewContainer : UIViewRepresentable {
    
-
-    //el wey que va tener y cargar mis stickers
     @Environment(ImageManager.self) var imageManager
 
-    //creo una piche view ARVIew nada mas, el rendering lo va a hacer reality kit en si
-    
-    //pero asi abro la sesion para que el iphone obtenga datos
-    
-    //esto crea una view que swift iu puede leer
     func makeUIView(context: Context) -> ARView {
-        
-        //instanseo y creo de la clase arview una que no tiene medidas aun
         let arView = ARView(frame: .zero)
             
+        // configuracion del ar kit
+        let config = ARWorldTrackingConfiguration()
+        config.planeDetection = .vertical
+        config.isLightEstimationEnabled = true
+        config.frameSemantics = .personSegmentationWithDepth
         
-            // configuracion del ar kit
-            let config = ARWorldTrackingConfiguration()
-        
-            config.planeDetection = .vertical
-        
-            config.isLightEstimationEnabled = true
-               
-            config.frameSemantics = .personSegmentationWithDepth
-        
-        
-            //esto crea la session de ar kit en si
-            arView.session.run(config)
-        
+        arView.session.run(config)
         arView.addCoaching()
         
+        // Añadir gesture recognizer para tap-to-place
+        let tapGesture = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(context.coordinator.handleTap)
+        )
+        arView.addGestureRecognizer(tapGesture)
+        
+        // Guardar referencia al ImageManager en el coordinator
+        context.coordinator.imageManager = imageManager
+        context.coordinator.arView = arView
+        
         return arView
-       }
-    
-    
-    //la funcion que añade o le quita cosas a nuestra escena // solo tiene una perrra escena por view
-    
-    //si quiero tener una entidad dentro del mundo, esta tiene que nacer de un aentidad de anchor
-    
+    }
     
     func updateUIView(_ uiView: ARView, context: Context) {
-            print("\n🔄 updateUIView called")
-            
-            // Limpiar escena
-            uiView.scene.anchors.removeAll()
-            print("🧹 Cleared previous anchors")
-            
-            // Validar que hay imagen seleccionada
-            guard let selectedIndex = imageManager.selectedStickerIndex,
+        // Actualizar la referencia al imageManager
+        context.coordinator.imageManager = imageManager
+    }
+    
+    // ✅ Crear Coordinator para manejar el tap
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
+    class Coordinator: NSObject {
+        var imageManager: ImageManager?
+        weak var arView: ARView?
+        
+        @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let arView = arView,
+                  let imageManager = imageManager,
+                  let selectedIndex = imageManager.selectedStickerIndex,
                   selectedIndex < imageManager.savedImages.count else {
-                print("⚠️ No sticker selected or invalid index")
+                print("⚠️ No sticker selected")
                 return
             }
             
-            print("📸 Creating sticker for index: \(selectedIndex)")
+            let tapLocation = recognizer.location(in: arView)
             
-            // Crear el sticker
-            if let stickerEntity = createStickerEntity(from: imageManager.savedImages[selectedIndex]) {
-                let anchor = AnchorEntity(plane: .vertical)
+            let results = arView.raycast(
+                from: tapLocation,
+                allowing: .estimatedPlane,
+                alignment: .vertical
+            )
+            
+            guard let firstResult = results.first else {
+                print("⚠️ No vertical surface detected")
+                return
+            }
+            
+            if let stickerEntity = createStickerEntity(
+                from: imageManager.savedImages[selectedIndex]
+            ) {
+                let anchor = AnchorEntity(world: firstResult.worldTransform)
                 
+                // ✅ Rotar el sticker para que quede pegado a la pared
+                // Por defecto el plano está en XY, necesitamos rotarlo para que mire hacia afuera
+                stickerEntity.orientation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
+                stickerEntity.transform.rotation = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
+                            
                 anchor.addChild(stickerEntity)
+                arView.scene.addAnchor(anchor)
                 
-                uiView.scene.addAnchor(anchor)
-                
-                print("✅ Sticker added to scene successfully!\n")
-            } else {
-                print("❌ Failed to create sticker entity\n")
+                print("✅ Sticker placed on wall!")
             }
         }
         
-        // Método helper separado para crear el sticker
         private func createStickerEntity(from image: UIImage) -> ModelEntity? {
-            print("  🖼️  Image size: \(Int(image.size.width))x\(Int(image.size.height))")
-            
-            // Obtener CGImage
             guard let cgImage = image.cgImage else {
-                print("  ❌ Failed to get CGImage")
+                print("❌ Failed to get CGImage")
                 return nil
             }
-            print("  ✅ CGImage obtained")
             
-            // Crear textura
+            // ✅ Crear textura
             guard let texture = try? TextureResource(
                 image: cgImage,
                 options: .init(semantic: .color)
             ) else {
-                print("  ❌ Failed to create TextureResource")
+                print("❌ Failed to create texture")
                 return nil
             }
-            print("  ✅ TextureResource created")
             
-            // Crear material
-            var material = UnlitMaterial()
-            material.color = .init(tint: .white, texture: .init(texture))
-            print("  ✅ Material created")
+            // ✅ Usar PhysicallyBasedMaterial con transparencia
+            var material = PhysicallyBasedMaterial()
+            material.baseColor = .init(tint: .white, texture: .init(texture))
+            material.metallic = .init(floatLiteral: 0.0)
+            material.roughness = .init(floatLiteral: 1.0)
             
-            // Calcular dimensiones con aspect ratio
+            // ✅ La clave: activar transparencia con blending
+            material.blending = .transparent(opacity: 1.0)
+            
+            material.opacityThreshold = 0.0
+            
             let width: Float = 0.3
             let aspectRatio = Float(image.size.height / image.size.width)
             let height = width * aspectRatio
-            print("  📐 Plane dimensions: \(width)m x \(height)m (aspect: \(String(format: "%.2f", aspectRatio)))")
             
-            // Crear plano y entity
             let planeMesh = MeshResource.generatePlane(width: width, height: height)
             let modelEntity = ModelEntity(mesh: planeMesh, materials: [material])
             
-            print("  ✅ ModelEntity created successfully")
             return modelEntity
         }
     }
+}
 
 
 extension ARView {
