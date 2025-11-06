@@ -735,7 +735,6 @@ class EffectsPipeline {
         
         guard let clippedPerson = maskFilter2.outputImage else { return nil }
         
-        // AQUÍ VA EL CAMBIO: Crear círculo más grande como outline sólido
         let outlineBox = CGRect(
             x: centeredBox.minX - (shapeOutlineWidth / canvasSize),
             y: centeredBox.minY - (shapeOutlineWidth / canvasSize),
@@ -751,6 +750,16 @@ class EffectsPipeline {
         backdropComposite.backgroundImage = solidOutline
         
         guard let whiteLayer = backdropComposite.outputImage else { return nil }
+        
+        // Shrink the mask by 5% to cut a bit of the edges
+        let shrinkFactor: CGFloat = 0.98
+        let shrinkAmount = (1.0 - shrinkFactor) / 2.0
+        let finalMaskBox = CGRect(
+            x: outlineBox.minX + (outlineBox.width * shrinkAmount),
+            y: outlineBox.minY + (outlineBox.height * shrinkAmount),
+            width: outlineBox.width * shrinkFactor,
+            height: outlineBox.height * shrinkFactor
+        )
         
         if useThreeLayerEffect {
             let composite1 = CIFilter.sourceOverCompositing()
@@ -769,7 +778,17 @@ class EffectsPipeline {
             finalComposite.inputImage = mainStack
             finalComposite.backgroundImage = whiteLayer
             
-            guard let finalImage = finalComposite.outputImage else { return nil }
+            guard let compositedImage = finalComposite.outputImage else { return nil }
+            
+            // Cut the final composited image with the shrunk circular mask
+            guard let finalCircleMask = createCircleMask(boundingBox: finalMaskBox, in: canvasExtent) else { return nil }
+            
+            let finalMaskFilter = CIFilter.blendWithMask()
+            finalMaskFilter.inputImage = compositedImage
+            finalMaskFilter.backgroundImage = transparentBackground
+            finalMaskFilter.maskImage = finalCircleMask
+            
+            guard let finalImage = finalMaskFilter.outputImage else { return nil }
             return context.createCGImage(finalImage, from: canvasExtent)
         } else {
             let composite1 = CIFilter.sourceOverCompositing()
@@ -788,7 +807,17 @@ class EffectsPipeline {
             finalComposite.inputImage = mainStack
             finalComposite.backgroundImage = whiteLayer
             
-            guard let finalImage = finalComposite.outputImage else { return nil }
+            guard let compositedImage = finalComposite.outputImage else { return nil }
+            
+            // Cut the final composited image with the shrunk circular mask
+            guard let finalCircleMask = createCircleMask(boundingBox: finalMaskBox, in: canvasExtent) else { return nil }
+            
+            let finalMaskFilter = CIFilter.blendWithMask()
+            finalMaskFilter.inputImage = compositedImage
+            finalMaskFilter.backgroundImage = transparentBackground
+            finalMaskFilter.maskImage = finalCircleMask
+            
+            guard let finalImage = finalMaskFilter.outputImage else { return nil }
             return context.createCGImage(finalImage, from: canvasExtent)
         }
     }
@@ -842,7 +871,6 @@ class EffectsPipeline {
             return nil
         }
         
-        // OUTLINE DE COLOR DEL USUARIO
         guard let rectangleOutline = generateShapeOutline(from: rectangleBackground, color: outlineColor) else { return nil }
         
         let transparentBackground = CIImage.empty().cropped(to: canvasExtent)
@@ -861,19 +889,64 @@ class EffectsPipeline {
         
         guard let clippedPerson = maskFilter2.outputImage else { return nil }
         
-        // WHITE BACKDROP (fondo) + SU OUTLINE BLANCO (más afuera)
-        guard let whiteBackdrop = roundedRectangleToCIImage(boundingBox: centeredBox, cornerRadius: cornerRadius, in: canvasExtent, color: .gray) else { return nil }
-        guard let whiteOutline = generateShapeOutlineSolid(from: whiteBackdrop, color: .gray) else { return nil }
+        let outlineBox = CGRect(
+            x: centeredBox.minX - (shapeOutlineWidth / canvasSize),
+            y: centeredBox.minY - (shapeOutlineWidth / canvasSize),
+            width: centeredBox.width + (shapeOutlineWidth * 2 / canvasSize),
+            height: centeredBox.height + (shapeOutlineWidth * 2 / canvasSize)
+        )
         
-        // Backdrop encima de su outline
+        guard let solidOutline = roundedRectangleToCIImage(boundingBox: outlineBox, cornerRadius: cornerRadius, in: canvasExtent, color: UIColor(outlineColor)) else { return nil }
+        guard let whiteBackdrop = roundedRectangleToCIImage(boundingBox: centeredBox, cornerRadius: cornerRadius, in: canvasExtent, color: .white) else { return nil }
+        
         let backdropComposite = CIFilter.sourceOverCompositing()
         backdropComposite.inputImage = whiteBackdrop
-        backdropComposite.backgroundImage = whiteOutline
+        backdropComposite.backgroundImage = solidOutline
         
         guard let whiteLayer = backdropComposite.outputImage else { return nil }
         
+        // Shrink the mask by a fixed amount based on outline width
+        let shrinkAmount = shapeOutlineWidth * 0.05 / canvasSize
+        let finalMaskBox = CGRect(
+            x: outlineBox.minX + shrinkAmount,
+            y: outlineBox.minY + shrinkAmount,
+            width: outlineBox.width - (shrinkAmount * 1.5),
+            height: outlineBox.height - (shrinkAmount * 1.5)
+        )
+        
+        // Adjust corner radius proportionally based on the shrink
+        let shrinkInPixels = shapeOutlineWidth * 0.05
+        let adjustedCornerRadius = max(1.0, cornerRadius - shrinkInPixels)
+        
         if useThreeLayerEffect {
-            // Tu implementación original
+            let composite1 = CIFilter.sourceOverCompositing()
+            composite1.inputImage = rectangleOutline
+            composite1.backgroundImage = rectangleBackground
+            
+            guard let outlineOnBackground = composite1.outputImage else { return nil }
+            
+            let composite2 = CIFilter.sourceOverCompositing()
+            composite2.inputImage = clippedPerson
+            composite2.backgroundImage = outlineOnBackground
+            
+            guard let mainStack = composite2.outputImage else { return nil }
+            
+            let finalComposite = CIFilter.sourceOverCompositing()
+            finalComposite.inputImage = mainStack
+            finalComposite.backgroundImage = whiteLayer
+            
+            guard let compositedImage = finalComposite.outputImage else { return nil }
+            
+            guard let finalRectangleMask = createRectangleMask(boundingBox: finalMaskBox, cornerRadius: adjustedCornerRadius, in: canvasExtent) else { return nil }
+            
+            let finalMaskFilter = CIFilter.blendWithMask()
+            finalMaskFilter.inputImage = compositedImage
+            finalMaskFilter.backgroundImage = transparentBackground
+            finalMaskFilter.maskImage = finalRectangleMask
+            
+            guard let finalImage = finalMaskFilter.outputImage else { return nil }
+            return context.createCGImage(finalImage, from: canvasExtent)
+        } else {
             let composite1 = CIFilter.sourceOverCompositing()
             composite1.inputImage = clippedPerson
             composite1.backgroundImage = rectangleBackground
@@ -881,38 +954,25 @@ class EffectsPipeline {
             guard let bgWithPerson = composite1.outputImage else { return nil }
             
             let composite2 = CIFilter.sourceOverCompositing()
-            composite2.inputImage = rectangleOutline  // Outline de COLOR
-            composite2.backgroundImage = bgWithPerson
+            composite2.inputImage = bgWithPerson
+            composite2.backgroundImage = rectangleOutline
             
             guard let mainStack = composite2.outputImage else { return nil }
             
-            // Todo encima del white layer
             let finalComposite = CIFilter.sourceOverCompositing()
             finalComposite.inputImage = mainStack
             finalComposite.backgroundImage = whiteLayer
             
-            guard let finalImage = finalComposite.outputImage else { return nil }
-            return context.createCGImage(finalImage, from: canvasExtent)
-        } else {
-            // Tu implementación original
-            let composite1 = CIFilter.sourceOverCompositing()
-            composite1.inputImage = rectangleOutline  // Outline de COLOR
-            composite1.backgroundImage = rectangleBackground
+            guard let compositedImage = finalComposite.outputImage else { return nil }
             
-            guard let bgWithOutline = composite1.outputImage else { return nil }
+            guard let finalRectangleMask = createRectangleMask(boundingBox: finalMaskBox, cornerRadius: adjustedCornerRadius, in: canvasExtent) else { return nil }
             
-            let composite2 = CIFilter.sourceOverCompositing()
-            composite2.inputImage = clippedPerson
-            composite2.backgroundImage = bgWithOutline
+            let finalMaskFilter = CIFilter.blendWithMask()
+            finalMaskFilter.inputImage = compositedImage
+            finalMaskFilter.backgroundImage = transparentBackground
+            finalMaskFilter.maskImage = finalRectangleMask
             
-            guard let mainStack = composite2.outputImage else { return nil }
-            
-            // Todo encima del white layer
-            let finalComposite = CIFilter.sourceOverCompositing()
-            finalComposite.inputImage = mainStack
-            finalComposite.backgroundImage = whiteLayer
-            
-            guard let finalImage = finalComposite.outputImage else { return nil }
+            guard let finalImage = finalMaskFilter.outputImage else { return nil }
             return context.createCGImage(finalImage, from: canvasExtent)
         }
     }
